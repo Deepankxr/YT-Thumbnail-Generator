@@ -39,11 +39,16 @@ Run the API:
 uvicorn app.main:app --reload --port 8080
 ```
 
+Then open **http://localhost:8080/preview** for the studio UI — every field as a
+control, re-rendering as you type, with a full-size and a feed-size preview side
+by side.
+
 ## Endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/health` | Liveness + version |
+| GET | `/preview` | Browser UI for editing thumbnails |
 | GET | `/styles` | Presets, palettes, font and accent treatment |
 | POST | `/generate` | Render a thumbnail |
 
@@ -100,6 +105,41 @@ The presets are a starting point, not a cage. Every knob below is per-request.
 
 Typography is driven off variable-font axes, so `ottley`'s compressed caps come
 from Archivo's `wdth` axis at 72 rather than a second font file.
+
+## Adding a real face
+
+This is the single biggest quality lever. The compositor can only be as good as
+the cutout you feed it.
+
+**Shoot once, reuse forever.** Around 20 frames covers a channel indefinitely:
+a few expressions (neutral, smiling, surprised, pointing), a few angles, framed
+from mid-torso up.
+
+What actually determines whether the result looks good:
+
+| Do | Why |
+|---|---|
+| Light the subject brighter than the background | Matting keys on separation; flat lighting produces a muddy edge |
+| Shoot against a plain wall, ideally green or a colour you aren't wearing | Fewer edge artefacts, especially around hair |
+| Leave headroom — don't crop the top of the head | A clipped head can't be re-composed later |
+| 2000px+ on the short edge | Cutouts get scaled up; soft source reads as blurry |
+| Keep hands inside the frame if pointing | Gestures are what make these thumbnails feel alive |
+| Avoid busy or backlit backgrounds | Halos and chewed-up hair edges |
+
+Then run:
+
+```bash
+pip install rembg onnxruntime
+python3 prepare_subject.py shoot/*.jpg -o assets/subjects/
+```
+
+It removes the background, trims to the subject, normalises the height, and QCs
+the result — flagging hard/jagged edges, background halos, low resolution, and
+clipped heads. Output goes straight into the `subject` field.
+
+Already have cutouts from Photoshop, Photoroom, or macOS Preview
+(Markup → Remove Background)? The script passes transparent images straight
+through to the trim and QC steps, so `rembg` is optional.
 
 ## Rendered props instead of generated ones
 

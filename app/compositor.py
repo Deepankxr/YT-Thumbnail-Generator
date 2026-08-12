@@ -365,12 +365,14 @@ def legibility_report(img: Image.Image, style_name: str = "saraev", feed_width: 
     y1 = min(small.height, y0 + max(2, int(box[3] * small.height)))
     region = small.crop((x0, y0, x1, y1))
 
-    px = list(region.getdata())
-    mean = sum(px) / len(px)
-    stdev = math.sqrt(sum((p - mean) ** 2 for p in px) / len(px))
+    # Histograms keep this O(256) in Python instead of O(pixels).
+    hist = region.histogram()
+    n = max(1, region.width * region.height)
+    mean = sum(i * c for i, c in enumerate(hist)) / n
+    stdev = math.sqrt(sum(c * (i - mean) ** 2 for i, c in enumerate(hist)) / n)
 
-    edge_px = list(region.filter(ImageFilter.FIND_EDGES).getdata())
-    edge_energy = sum(edge_px) / len(edge_px)
+    edge_hist = region.filter(ImageFilter.FIND_EDGES).histogram()
+    edge_energy = sum(i * c for i, c in enumerate(edge_hist)) / n
 
     return {
         "feed_width": feed_width,

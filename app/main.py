@@ -20,10 +20,11 @@ import os
 import re
 
 from fastapi import FastAPI, Header, HTTPException, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from . import __version__
 from .compositor import legibility_report, render
+from .preview import PREVIEW_HTML
 from .hero import HeroUnavailable, generate_hero
 from .schema import ThumbnailRequest
 from .styles import STYLES
@@ -52,6 +53,13 @@ def _accent_kind(style) -> str:
     if style.underline_color:
         return "swash" if style.underline_swash else "underline"
     return "none"
+
+
+@app.get("/preview", response_class=HTMLResponse)
+def preview():
+    """Browser UI for editing thumbnails. Unauthenticated by design: it is a
+    local design tool, and the endpoints it calls enforce the key themselves."""
+    return PREVIEW_HTML
 
 
 @app.get("/health")
