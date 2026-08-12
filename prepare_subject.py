@@ -11,6 +11,10 @@ Background removal needs `rembg`:
 
     pip install rembg onnxruntime
 
+The first run downloads the matting model. The default (u2net, ~175MB) is fast
+and fine for a well-lit photo against a plain wall; pass
+`--model birefnet-general` for noticeably better hair edges at a ~900MB download.
+
 If it isn't installed, the script still trims and QCs an image that already has
 transparency — so a cutout made in Photoshop, Photoroom, or macOS Preview
 ("Remove Background" in the markup toolbar) can be dropped straight in.
@@ -29,8 +33,15 @@ TARGET_HEIGHT = 1400  # generous for a 1280x720 canvas rendered at 2x
 MIN_SOURCE_PX = 900   # below this the cutout goes soft once scaled up
 
 
-def cutout(img: Image.Image) -> tuple[Image.Image, bool]:
-    """Return (rgba, removed_here). Passes through images that already have alpha."""
+def cutout(img: Image.Image, model: str = "u2net") -> tuple[Image.Image, bool]:
+    """Return (rgba, removed_here). Passes through images that already have alpha.
+
+    `u2net` is the default deliberately: ~175MB and fast, and for a well-lit
+    photo shot against a plain wall the result is indistinguishable from the
+    heavier model once composited. `birefnet-general` mattes hair noticeably
+    better but is a ~900MB download, so it's opt-in via --model rather than
+    something every first run has to wait for.
+    """
     if img.mode == "RGBA" and img.getchannel("A").getextrema()[0] < 250:
         return img, False  # already transparent somewhere; trust it
 
@@ -44,13 +55,15 @@ def cutout(img: Image.Image) -> tuple[Image.Image, bool]:
             "Photoroom, or Photoshop) and re-run this script on the PNG."
         )
 
-    # birefnet-general is the strongest matte for hair; u2net is the fallback.
-    for model in ("birefnet-general", "u2net"):
-        try:
-            return remove(img, session=new_session(model)), True
-        except Exception as exc:
-            last = exc
-    raise SystemExit(f"background removal failed: {last}")
+    try:
+        return remove(img, session=new_session(model)), True
+    except Exception as exc:
+        raise SystemExit(
+            f"background removal failed with model '{model}': {exc}\n"
+            "First run downloads the model, so this can also be a slow or "
+            "interrupted download — retry, or pass --model u2net for the "
+            "smallest one."
+        )
 
 
 def trim(img: Image.Image, pad: int = 8) -> Image.Image:
@@ -101,10 +114,10 @@ def quality_report(original: Image.Image, result: Image.Image) -> dict:
     }
 
 
-def process(path: str, out_path: str, height: int) -> dict:
+def process(path: str, out_path: str, height: int, model: str) -> dict:
     src = Image.open(path)
     original = src.copy()
-    rgba, removed = cutout(src.convert("RGBA"))
+    rgba, removed = cutout(src.convert("RGBA"), model)
     trimmed = trim(rgba)
 
     ratio = height / trimmed.height
@@ -126,6 +139,10 @@ def main():
     parser.add_argument("-o", "--out", required=True,
                         help="Output PNG, or a directory when passing several images")
     parser.add_argument("--height", type=int, default=TARGET_HEIGHT)
+    parser.add_argument("--model", default="u2net",
+                        choices=["u2net", "birefnet-general", "isnet-general-use"],
+                        help="Matting model. u2net (~175MB) is the fast default; "
+                             "birefnet-general (~900MB) mattes hair better.")
     args = parser.parse_args()
 
     paths = [p for pattern in args.images for p in sorted(glob.glob(pattern))] or args.images
@@ -140,7 +157,7 @@ def main():
             out_path = args.out
 
         try:
-            r = process(path, out_path, args.height)
+            r = process(path, out_path, args.height, args.model)
         except SystemExit as exc:
             print(f"{path}: {exc}", file=sys.stderr)
             failures += 1
