@@ -7,6 +7,19 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+class ElementOverride(BaseModel):
+    """A nudge applied on top of the preset's placement for one element."""
+
+    dx: float = Field(0.0, ge=-1.0, le=1.0, description="Horizontal delta, fraction of width.")
+    dy: float = Field(0.0, ge=-1.0, le=1.0, description="Vertical delta, fraction of height.")
+    scale: float = Field(1.0, gt=0.05, le=8.0, description="Size multiplier.")
+    # Arrows are positioned by their endpoints rather than a box.
+    from_: tuple[float, float] | None = Field(None, alias="from")
+    to: tuple[float, float] | None = None
+
+    model_config = {"populate_by_name": True}
+
+
 class ThumbnailRequest(BaseModel):
     headline: str = Field(..., min_length=1, max_length=120,
                           description="Thumbnail copy. 3-6 words performs best.")
@@ -45,6 +58,14 @@ class ThumbnailRequest(BaseModel):
 
     arrow: bool = True
     subject_side: Literal["left", "right"] | None = None
+    overrides: dict[str, ElementOverride] = Field(
+        default_factory=dict,
+        description="Per-element nudges from the preset, keyed by element id "
+                    "(headline, subject, hero, arrow). Offsets are deltas so "
+                    "the intent survives a style change.")
+    include_layout: bool = Field(
+        False, description="Return where each element landed, for drawing "
+                           "direct-manipulation handles.")
     text_position: Literal["top", "bottom"] | None = Field(
         None, description="Move the headline band; overrides the style default.")
 

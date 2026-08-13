@@ -77,16 +77,21 @@ def parse_color(value: str | tuple | None) -> tuple[int, int, int] | None:
 
 def _place_subjects(canvas: Image.Image, refs: list[str | None], style: Style,
                     box_rect: tuple[float, float, float, float], anchor: str,
-                    w: int, h: int) -> None:
+                    w: int, h: int) -> tuple[tuple[int, int], tuple[int, int]] | None:
     """Composite one or more cutouts, splitting the box into overlapping columns.
 
     Liam's group shots (four people shoulder to shoulder) need the figures to
     overlap slightly, or the row reads as separate pasted stickers.
+
+    Returns (origin, size) covering everything placed, so the studio can draw a
+    selection box around it.
     """
     images = [load_image(r) if r else placeholder_subject() for r in refs]
     images = [im for im in images if im is not None]
     if not images:
-        return
+        return None
+
+    placed_boxes: list[tuple[int, int, int, int]] = []
 
     bx, by, bw, bh = box_rect
     n = len(images)
@@ -118,6 +123,13 @@ def _place_subjects(canvas: Image.Image, refs: list[str | None], style: Style,
             canvas.alpha_composite(
                 rim_light(placed, style.subject_rim, style.subject_rim_width * SCALE, 0.85))
         canvas.alpha_composite(placed)
+        placed_boxes.append((origin[0], origin[1], fitted.width, fitted.height))
+
+    left = min(b[0] for b in placed_boxes)
+    top = min(b[1] for b in placed_boxes)
+    right = max(b[0] + b[2] for b in placed_boxes)
+    bottom = max(b[1] + b[3] for b in placed_boxes)
+    return ((left, top), (right - left, bottom - top))
 
 
 def _place_icons(canvas: Image.Image, refs: list[str], style: Style, w: int, h: int) -> None:
@@ -170,7 +182,7 @@ def placeholder_subject(size: tuple[int, int] = (900, 1200)) -> Image.Image:
     return img
 
 
-def render(
+def compose(
     *,
     headline: str,
     style_name: str = "saraev",
@@ -190,12 +202,46 @@ def render(
     toast_amount: str | None = None,
     subject_side: str | None = None,
     text_position: str | None = None,
+    overrides: dict | None = None,
     width: int = BASE_W,
     height: int = BASE_H,
-) -> Image.Image:
-    """Compose one thumbnail and return it at `width` x `height`."""
+) -> tuple[Image.Image, list[dict]]:
+    """Compose one thumbnail, returning it with a manifest of where things landed.
+
+    The manifest is what makes direct manipulation possible: the studio draws
+    interactive handles over the image using these boxes, so the browser never
+    needs its own copy of the layout engine and cannot drift from what the
+    server actually renders.
+
+    `overrides` nudges elements away from their preset positions:
+        {"subject": {"dx": 0.05, "dy": -0.02, "scale": 1.2},
+         "headline": {"dx": 0, "dy": 0.1, "scale": 0.9},
+         "arrow": {"from": [0.3, 0.4], "to": [0.5, 0.6]}}
+    Offsets are deltas rather than absolutes so that switching style keeps the
+    user's intent ("a bit left of wherever this preset puts it").
+    """
     style: Style = get_style(style_name, palette)
     w, h = width * SCALE, height * SCALE
+    ov = overrides or {}
+    manifest: list[dict] = []
+
+    def _norm_box(origin: tuple[int, int], size: tuple[int, int]) -> dict:
+        return {"x": origin[0] / w, "y": origin[1] / h,
+                "w": size[0] / w, "h": size[1] / h}
+
+    def _shift(rect: tuple[float, float, float, float], key: str
+               ) -> tuple[float, float, float, float]:
+        """Apply this element's dx/dy/scale to a normalised rect."""
+        o = ov.get(key) or {}
+        x, y, bw, bh = rect
+        scale = float(o.get("scale") or 1.0)
+        if scale != 1.0:
+            # Grow about the rect's centre so centred layouts stay centred.
+            x -= bw * (scale - 1) / 2
+            y -= bh * (scale - 1) / 2
+            bw *= scale
+            bh *= scale
+        return (x + float(o.get("dx") or 0.0), y + float(o.get("dy") or 0.0), bw, bh)
 
     # --- background -------------------------------------------------------
     if background:
@@ -240,12 +286,14 @@ def render(
         )
 
     if hero_layer is not None:
-        box = _denorm(style.hero_box, w, h)
+        box = _denorm(_shift(style.hero_box, "hero"), w, h)
         fitted, origin = _fit(hero_layer, box, "center")
         if not card_text and not toast_text:
             canvas.alpha_composite(drop_shadow(
                 _pad_to(fitted, (w, h), origin), (0, int(18 * SCALE)), int(26 * SCALE), 0.45))
         canvas.alpha_composite(fitted, origin)
+        manifest.append({"id": "hero", "type": "image", "label": "Hero / card",
+                         **_norm_box(origin, fitted.size)})
 
     # --- subject cutout ---------------------------------------------------
     refs: list[str | None] = list(subjects) if subjects else [subject]
@@ -258,7 +306,11 @@ def render(
         box_rect = (1.0 - box_rect[2] - 0.02, box_rect[1], box_rect[2], box_rect[3])
         anchor = anchor.replace("left", "right")
 
-    _place_subjects(canvas, refs, style, box_rect, anchor, w, h)
+    subject_bbox = _place_subjects(canvas, refs, style, _shift(box_rect, "subject"),
+                                   anchor, w, h)
+    if subject_bbox:
+        manifest.append({"id": "subject", "type": "image", "label": "Photo",
+                         **_norm_box(subject_bbox[0], subject_bbox[1])})
 
     if icons:
         _place_icons(canvas, icons, style, w, h)
@@ -278,13 +330,21 @@ def render(
 
     # --- arrow ------------------------------------------------------------
     if arrow:
-        start = (style.arrow_from[0] * w, style.arrow_from[1] * h)
-        end = (style.arrow_to[0] * w, style.arrow_to[1] * h)
+        a_ov = ov.get("arrow") or {}
+        n_from = tuple(a_ov.get("from") or style.arrow_from)
+        n_to = tuple(a_ov.get("to") or style.arrow_to)
+        start = (n_from[0] * w, n_from[1] * h)
+        end = (n_to[0] * w, n_to[1] * h)
         canvas.alpha_composite(hand_arrow(
             (w, h), start, end, style.arrow_color,
             width=style.arrow_width * SCALE, bow=style.arrow_bow,
             head_len=46.0 * SCALE,
         ))
+        # Endpoints rather than a box: an arrow is dragged by its tips.
+        manifest.append({"id": "arrow", "type": "arrow", "label": "Arrow",
+                         "from": [n_from[0], n_from[1]], "to": [n_to[0], n_to[1]],
+                         "x": min(n_from[0], n_to[0]), "y": min(n_from[1], n_to[1]),
+                         "w": abs(n_to[0] - n_from[0]), "h": abs(n_to[1] - n_from[1])})
 
     # --- headline ---------------------------------------------------------
     copy = _apply_case(headline, style.text_case)
@@ -293,6 +353,7 @@ def render(
         text_rect = (text_rect[0], 0.06, text_rect[2], text_rect[3])
     elif text_position == "bottom":
         text_rect = (text_rect[0], 1.0 - text_rect[3] - 0.06, text_rect[2], text_rect[3])
+    text_rect = _shift(text_rect, "headline")
     box = _denorm(text_rect, w, h)
     pill_pad_x = int(style.accent_pad[0] * SCALE)
     layout = layout_headline(
@@ -326,7 +387,28 @@ def render(
         word_colors={k: parse_color(v) for k, v in (word_colors or {}).items()},
     )
 
-    return canvas.convert("RGB").resize((width, height), Image.LANCZOS)
+    if layout.runs:
+        # The painted ink, not the layout box — a selection rectangle around
+        # empty space above the text would feel broken to drag.
+        left = min(r.x for r in layout.runs)
+        right = max(r.x + r.width for r in layout.runs)
+        top = min(r.y for r in layout.runs)
+        bottom = max(r.y for r in layout.runs) + layout.size
+        manifest.append({
+            "id": "headline", "type": "text", "label": "Headline",
+            "x": left / w, "y": top / h,
+            "w": (right - left) / w, "h": (bottom - top) / h,
+            "font_px": layout.size / SCALE,
+            "align": style.text_align,
+            "color": "#%02x%02x%02x" % style.text_color,
+        })
+
+    return canvas.convert("RGB").resize((width, height), Image.LANCZOS), manifest
+
+
+def render(**kwargs) -> Image.Image:
+    """Compose and return just the image — the shape most callers want."""
+    return compose(**kwargs)[0]
 
 
 def _pad_to(layer: Image.Image, size: tuple[int, int], origin: tuple[int, int]) -> Image.Image:

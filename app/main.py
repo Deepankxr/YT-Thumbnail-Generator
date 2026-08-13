@@ -20,10 +20,11 @@ import os
 import re
 
 from fastapi import FastAPI, Header, HTTPException, Response
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
 from . import __version__
-from .compositor import legibility_report, render
+from .assets import FONT_DIR, FONT_FILES
+from .compositor import compose, legibility_report
 from .preview import PREVIEW_HTML
 from .hero import HeroUnavailable, generate_hero
 from .schema import ThumbnailRequest
@@ -53,6 +54,18 @@ def _accent_kind(style) -> str:
     if style.underline_color:
         return "swash" if style.underline_swash else "underline"
     return "none"
+
+
+@app.get("/fonts/{family}", include_in_schema=False)
+def font(family: str):
+    """Serve a bundled TTF so the studio's inline text editor uses the same
+    typeface the renderer does — otherwise editing shows one font and the
+    render comes back in another."""
+    filename = FONT_FILES.get(family.lower())
+    if not filename:
+        raise HTTPException(status_code=404, detail=f"unknown font '{family}'")
+    return FileResponse(os.path.join(FONT_DIR, filename), media_type="font/ttf",
+                        headers={"Cache-Control": "public, max-age=31536000"})
 
 
 @app.get("/", include_in_schema=False)
@@ -103,7 +116,7 @@ def generate(req: ThumbnailRequest, x_api_key: str | None = Header(default=None)
             raise HTTPException(status_code=502, detail=f"hero generation failed: {exc}") from exc
 
     try:
-        img = render(
+        img, layout = compose(
             headline=req.headline,
             style_name=req.style,
             palette=req.palette,
@@ -122,6 +135,8 @@ def generate(req: ThumbnailRequest, x_api_key: str | None = Header(default=None)
             toast_amount=req.toast_amount,
             subject_side=req.subject_side,
             text_position=req.text_position,
+            overrides={k: v.model_dump(by_alias=True, exclude_none=True)
+                       for k, v in req.overrides.items()},
             width=req.width,
             height=req.height,
         )
@@ -144,6 +159,7 @@ def generate(req: ThumbnailRequest, x_api_key: str | None = Header(default=None)
             "mimeType": MIME,
             "data": base64.b64encode(data).decode(),
             "qa": qa,
+            "layout": layout if req.include_layout else None,
         })
 
     headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
