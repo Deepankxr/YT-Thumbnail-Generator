@@ -46,7 +46,7 @@ PREVIEW_HTML = """
  button:disabled{opacity:.5;cursor:default}
  hr{border:0;border-top:1px solid var(--line);margin:16px 0}
 
- #wrap{position:relative;width:100%;max-width:980px;user-select:none}
+ #wrap{position:relative;width:100%;user-select:none}
  #wrap img{display:block;width:100%;border-radius:8px;background:#000;
            box-shadow:0 8px 34px rgba(0,0,0,.5)}
  #proxy{position:absolute;inset:0;display:none;pointer-events:none;will-change:transform;
@@ -71,6 +71,11 @@ PREVIEW_HTML = """
  .el.sel .h{display:block}
  .h.nw{left:-6px;top:-6px;cursor:nwse-resize}.h.ne{right:-6px;top:-6px;cursor:nesw-resize}
  .h.sw{left:-6px;bottom:-6px;cursor:nesw-resize}.h.se{right:-6px;bottom:-6px;cursor:nwse-resize}
+ .rot{position:absolute;left:50%;top:-30px;width:15px;height:15px;margin-left:-7px;
+      background:#fff;border:2px solid var(--sel);border-radius:50%;cursor:grab;display:none}
+ .el.sel .rot{display:block}
+ .rot::after{content:'';position:absolute;left:50%;top:100%;width:2px;height:14px;
+      margin-left:-1px;background:var(--sel)}
  .dot{position:absolute;width:15px;height:15px;margin:-7px 0 0 -7px;background:#fff;
       border:2px solid var(--sel);border-radius:50%;cursor:grab}
  #editor{position:absolute;margin:0;padding:0;border:0;outline:2px solid var(--sel);
@@ -79,6 +84,9 @@ PREVIEW_HTML = """
  .cap{font-size:10.5px;color:var(--muted);margin:15px 0 6px;text-transform:uppercase;letter-spacing:.06em}
  #feed{width:168px;border-radius:4px;box-shadow:0 2px 10px rgba(0,0,0,.5);display:block}
  #qa{font-size:11.5px;color:var(--muted);margin-top:11px}
+ #vbar{display:flex;gap:7px;align-items:center;margin-top:14px}
+ #vbar select{flex:1}
+ #vbar button{width:auto;margin:0;padding:7px 11px;font-size:12px}
  .badge{display:inline-block;padding:2px 8px;border-radius:99px;font-weight:700;font-size:10.5px}
  .ok{background:#13361f;color:#5ddc8a}.weak{background:#3d2412;color:#ffab52}
  .err{color:#ff8b6b;font-size:11.5px;white-space:pre-wrap;margin-top:7px}
@@ -210,6 +218,11 @@ PREVIEW_HTML = """
    <div id="tools"></div>
    <div id="editor" contenteditable="true" spellcheck="false"></div>
  </div>
+ <div id="vbar">
+   <select id="versions"><option value="">Version history &mdash; nothing saved yet</option></select>
+   <button id="vsave">Save version</button>
+   <button class="ghost" id="vdel">Delete</button>
+ </div>
  <div class="cap">Feed size &mdash; 168px, how viewers actually see it</div>
  <img id="feed">
  <div id="qa"></div>
@@ -225,6 +238,20 @@ PREVIEW_HTML = """
  <select id="vismodel" style="margin-top:6px"></select>
  <button class="ghost" id="analyze">Analyse &amp; rebuild</button>
  <div id="anotes" class="sub" style="margin-top:7px"></div>
+
+ <hr>
+ <h2>Avatar</h2>
+ <div class="sub" style="margin-bottom:0">Generates a cutout of you in a pose you
+   haven&rsquo;t shot. A real photo is sharper and never drifts &mdash; prefer one where you can.</div>
+ <label>Reference photo</label>
+ <input type="file" id="avref" accept="image/*">
+ <div class="row" style="margin-top:7px">
+  <div><label>Pose</label><select id="avpose"></select></div>
+  <div><label>Model</label><select id="avmodel"></select></div>
+ </div>
+ <input type="text" id="avextra" placeholder="extra direction (optional)" style="margin-top:7px">
+ <button class="ghost" id="avgo">Generate avatar</button>
+ <div id="avstatus" class="sub" style="margin-top:7px"></div>
 
  <hr>
  <label>OpenRouter key</label>
@@ -249,7 +276,7 @@ PREVIEW_HTML = """
 <script>
 let STYLES=[], LAYOUT=[], OVERRIDES={}, WORDCOLORS={}, LABELS=[], PALETTE=null, HIDDEN=[];
 let last=null, timer=null, SEL=[], editing=false, activeWord=null, lastTap={id:null,t:0};
-let BEHIND=[];
+let BEHIND=[], EDITED_BG=null;
 const isSel=id=>SEL.includes(id);
 const wrap=document.getElementById('wrap'), overlay=document.getElementById('overlay'),
       editor=document.getElementById('editor');
@@ -268,7 +295,7 @@ async function boot(){
     o.textContent=st.name+' \\u2014 '+st.accent;s.appendChild(o)});
   s.onchange=()=>{fillPalettes();schedule()};
   fillPalettes(); drawWords(); drawSwatches(); drawLabels();
-  loadEditModels(); loadVisionModels(); render(false);
+  loadEditModels(); loadVisionModels(); loadAvatarOptions(); render(false);
 }
 
 /* ---------------- recreate from a reference ---------------- */
@@ -446,6 +473,9 @@ async function buildSpec(){
   }
   if(FILES.subject)body.subject=FILES.subject;
   if(FILES.hero)body.hero=FILES.hero;
+  // An AI edit replaces the backdrop only, so it rides along as `background`
+  // and every element stays live on top of it.
+  if(EDITED_BG)body.background=EDITED_BG;
   return body;
 }
 
@@ -501,7 +531,8 @@ function drawOverlay(){
     d.style.left=(el.x*100)+'%'; d.style.top=(el.y*100)+'%';
     d.style.width=(el.w*100)+'%'; d.style.height=(el.h*100)+'%';
     d.innerHTML='<span class="tag">'+el.label+'</span>'+
-      ['nw','ne','sw','se'].map(c=>'<div class="h '+c+'" data-c="'+c+'"></div>').join('');
+      ['nw','ne','sw','se'].map(c=>'<div class="h '+c+'" data-c="'+c+'"></div>').join('')+
+      '<div class="rot" data-rot="1"></div>';
     d.addEventListener('pointerdown',e=>startDrag(e,el,d));
     overlay.appendChild(d);
   });
@@ -531,6 +562,7 @@ function updateSelInfo(){
   if(els.length===1){
     const el=els[0], o=OVERRIDES[el.id]||{dx:0,dy:0,scale:1};
     box.innerHTML='<b>'+el.label+'</b> selected &nbsp; scale '+(o.scale||1).toFixed(2)+
+      ' &nbsp; rotate '+(o.rotate||0).toFixed(1)+'\u00b0'+
       ' &nbsp; offset '+(o.dx||0).toFixed(3)+', '+(o.dy||0).toFixed(3);
   }else{
     box.innerHTML='<b>'+els.length+' elements</b> selected';
@@ -609,6 +641,7 @@ function startDrag(e,el,node){
   lastTap={id:el.id,t:now};
   e.preventDefault(); e.stopPropagation();
   select(el.id, e.shiftKey);
+  if(e.target.dataset.rot){ startRotate(e, el, node); return; }
   const corner=e.target.dataset.c;
   loadProxy(SEL.slice());   // in flight while the gesture starts
   const rect=wrap.getBoundingClientRect();
@@ -660,6 +693,34 @@ function startDrag(e,el,node){
   document.addEventListener('pointermove',move);
   document.addEventListener('pointerup',up);
 }
+function startRotate(e, el, node){
+  const rect=wrap.getBoundingClientRect();
+  const cx=rect.left+(el.x+el.w/2)*rect.width;
+  const cy=rect.top+(el.y+el.h/2)*rect.height;
+  const start=Math.atan2(e.clientY-cy, e.clientX-cx);
+  const from=Number((OVERRIDES[el.id]||{}).rotate||0);
+
+  const move=ev=>{
+    const now=Math.atan2(ev.clientY-cy, ev.clientX-cx);
+    // Screen y grows downward, so the on-screen angle is the negative of the
+    // anticlockwise rotation the renderer applies.
+    let deg = from - (now-start)*180/Math.PI;
+    if(ev.shiftKey) deg = Math.round(deg/15)*15;   // snap
+    deg = Math.max(-180, Math.min(180, deg));
+    node.style.transform='rotate('+(-deg)+'deg)';
+    node.dataset.pending=deg;
+  };
+  const up=()=>{
+    document.removeEventListener('pointermove',move);
+    document.removeEventListener('pointerup',up);
+    const deg=Number(node.dataset.pending);
+    if(!isNaN(deg)){ ovFor(el.id).rotate=Math.round(deg*10)/10; }
+    schedule();
+  };
+  document.addEventListener('pointermove',move);
+  document.addEventListener('pointerup',up);
+}
+
 function startArrow(e,el,which){
   e.preventDefault(); e.stopPropagation(); select('arrow');
   const rect=wrap.getBoundingClientRect();
@@ -753,13 +814,21 @@ async function runEdit(){
       headers:{'Content-Type':'application/json','x-openrouter-key':key},
       body:JSON.stringify({spec:await buildSpec(), instruction:instr,
                            model:$('ormodel').value, redraw_text:$('orredraw').checked,
-                           include_qa:true, output:'base64'})});
+                           include_subject:false, include_qa:true, output:'base64'})});
     if(!r.ok){ let d; try{d=(await r.json()).detail}catch(e){d=r.statusText}
                pending.className='msg err'; pending.textContent=String(d); return; }
     const j=await r.json();
+    // The model only touched the backdrop, so carry that forward and re-render
+    // normally. Everything stays selectable — clearing the layout here is what
+    // used to strand the canvas with no handles after an edit.
+    if(j.backdrop){ EDITED_BG=j.backdrop; await render(false); }
+    else {
+      const src='data:image/png;base64,'+j.data;
+      $('full').src=src; $('feed').src=src; last=j;
+      overlay.innerHTML=''; LAYOUT=[]; SEL=[];
+    }
+    saveVersion('AI \u00b7 '+instr.slice(0,26));
     const src='data:image/png;base64,'+j.data;
-    $('full').src=src; $('feed').src=src; last=j;
-    overlay.innerHTML=''; LAYOUT=[]; SEL=[]; $('tools').style.display='none';
     pending.textContent='Done.';
     const im=document.createElement('img'); im.src=src;
     im.title='Click to put this version back on the canvas';
@@ -775,7 +844,7 @@ $('orgo').onclick=runEdit;
 $('orinstr').addEventListener('keydown',e=>{
   if((e.key==='Enter'||e.keyCode===13)&&!e.shiftKey){ e.preventDefault(); runEdit(); }
 });
-$('orrevert').onclick=()=>render(false);
+$('orrevert').onclick=()=>{ EDITED_BG=null; render(false); };
 
 function deleteSelected(){
   if(!SEL.length) return;
@@ -860,6 +929,96 @@ async function applyHistory(step){
   restoring=false;
   await render(false);
 }
+
+/* ---------------- avatar ---------------- */
+async function loadAvatarOptions(){
+  try{
+    const {poses}=await (await fetch('avatar/poses')).json();
+    poses.forEach(p=>{ const o=document.createElement('option');
+      o.value=p.id; o.textContent=p.id.replace(/-/g,' '); o.title=p.description;
+      $('avpose').appendChild(o); });
+  }catch(e){}
+  try{
+    const {models}=await (await fetch('edit/models')).json();
+    models.forEach(m=>{ const o=document.createElement('option');
+      o.value=m.id; o.textContent=m.label; $('avmodel').appendChild(o); });
+  }catch(e){}
+}
+
+async function runAvatar(){
+  const key=$('orkey').value.trim(), out=$('avstatus');
+  const ref=await fileAsDataURL($('avref')) || FILES.subject;
+  if(!key){ out.textContent='Paste your OpenRouter key below first.'; return; }
+  if(!ref){ out.textContent='Pick a reference photo of yourself.'; return; }
+
+  out.textContent='Generating\u2026 this bills your key.';
+  $('avgo').disabled=true;
+  try{
+    const r=await fetch('avatar',{method:'POST',
+      headers:{'Content-Type':'application/json','x-openrouter-key':key},
+      body:JSON.stringify({reference:ref, pose:$('avpose').value,
+                           model:$('avmodel').value, extra:$('avextra').value})});
+    if(!r.ok){ let d; try{d=(await r.json()).detail}catch(e){d=r.statusText}
+               out.textContent=String(d); return; }
+    const j=await r.json();
+    FILES.subject='data:image/png;base64,'+j.data;   // becomes the cutout
+    out.textContent='Done \u2014 '+j.report.size+', matted with '+j.report.matted_with+
+                    (j.report.verdict==='ok'?'' : ' (check the cutout)');
+    addMsg('ai','Avatar \u00b7 '+j.report.pose, FILES.subject, j.report.model);
+    await render(false);
+    saveVersion('Avatar \u00b7 '+j.report.pose);
+  }catch(e){ out.textContent='Failed: '+e.message; }
+  finally{ $('avgo').disabled=false; }
+}
+$('avgo').onclick=runAvatar;
+
+/* ---------------- versions ----------------
+   Explicit saves, separate from undo: undo is a fine-grained trail you walk
+   backwards, a version is a point you meant to keep and want to come back to
+   after wandering off. AI edits auto-save because they cost money to redo. */
+let VERSIONS=[], vseq=0;
+
+function saveVersion(label){
+  if(!last) return;
+  VERSIONS.push({id:++vseq, label: label || ('v'+vseq+' \u00b7 '+$('headline').value.slice(0,28)),
+                 at:new Date().toLocaleTimeString(), state:snapshot(), bg:EDITED_BG,
+                 data:last.data, mime:last.mimeType||'image/png'});
+  drawVersions();
+}
+function drawVersions(){
+  const sel=$('versions');
+  sel.innerHTML = VERSIONS.length
+    ? '<option value="">Version history \u2014 '+VERSIONS.length+' saved</option>'
+    : '<option value="">Version history \u2014 nothing saved yet</option>';
+  [...VERSIONS].reverse().forEach(v=>{
+    const o=document.createElement('option'); o.value=v.id;
+    o.textContent=v.label+'  ('+v.at+')';
+    sel.appendChild(o);
+  });
+}
+async function restoreVersion(id){
+  const v=VERSIONS.find(x=>x.id===Number(id));
+  if(!v) return;
+  const st=JSON.parse(v.state);
+  restoring=true;
+  FIELDS.forEach(k=>{ if(st.f[k]!==undefined) $(k).value=st.f[k]; });
+  fillPalettes(); $('palette').value=st.f.palette;
+  $('arrow').checked=st.arrow;
+  $('tileon').checked=!!st.tile; $('tilex').checked=st.tilex!==false;
+  OVERRIDES=st.ov; HIDDEN=st.hid; BEHIND=st.beh||[]; LABELS=st.lab; WORDCOLORS=st.wc;
+  EDITED_BG=v.bg||null;
+  SEL=[]; drawWords(); drawLabels(); updateHiddenChip();
+  restoring=false;
+  await render(false);
+}
+$('vsave').onclick=()=>saveVersion();
+$('versions').onchange=e=>{ if(e.target.value) restoreVersion(e.target.value); };
+$('vdel').onclick=()=>{
+  const id=Number($('versions').value);
+  if(!id) return;
+  VERSIONS=VERSIONS.filter(v=>v.id!==id);
+  drawVersions();
+};
 
 /* ---------------- keyboard + wiring ---------------- */
 document.addEventListener('keydown',e=>{

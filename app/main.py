@@ -274,6 +274,13 @@ def edit(
         width=spec.width, height=spec.height,
     )
 
+    # Edit the backdrop alone by default. Sending the whole composite back
+    # bakes the cutout and props into pixels, which is exactly what left the
+    # studio unable to select anything after an edit.
+    art_ids = ["subject", "hero", "icons"]
+    vector_ids = ["headline", "arrow"] + [f"label{i}" for i in range(len(spec.labels))]
+    hidden = list(spec.hidden) + vector_ids + ([] if req.include_subject else art_ids)
+
     try:
         plate, _ = compose(
             subject=spec.subject, subjects=spec.subjects, icons=spec.icons,
@@ -283,7 +290,7 @@ def edit(
             card_text=spec.card_text, card_name=spec.card_name,
             card_handle=spec.card_handle, toast_text=spec.toast_text,
             toast_amount=spec.toast_amount,
-            draw_vector=False, **common,
+            hidden=hidden, draw_vector=False, **common,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -297,17 +304,30 @@ def edit(
     except OpenRouterError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    if not req.redraw_text:
-        data = base64.b64decode(edited_b64)
-        img = Image.open(io.BytesIO(data)).convert("RGB")
-    else:
+    # Compose the full frame over the edited backdrop so the caller sees the
+    # finished thumbnail, and hand back the backdrop so the studio can keep
+    # rendering over it with everything still editable.
+    layout: list[dict] = []
+    if req.redraw_text:
         try:
-            img, _ = compose(background=edited_b64, draw_art=False, **common)
+            img, layout = compose(
+                background=edited_b64,
+                subject=spec.subject, subjects=spec.subjects, icons=spec.icons,
+                hero=spec.hero,
+                diagram=spec.diagram.model_dump() if spec.diagram else None,
+                card_text=spec.card_text, card_name=spec.card_name,
+                card_handle=spec.card_handle, toast_text=spec.toast_text,
+                toast_amount=spec.toast_amount,
+                hidden=list(spec.hidden), behind=spec.behind, **common,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         buf = io.BytesIO()
-        img.save(buf, format="PNG", optimize=True)
+        img.save(buf, format="PNG")
         data = buf.getvalue()
+    else:
+        data = base64.b64decode(edited_b64)
+        img = Image.open(io.BytesIO(data)).convert("RGB")
 
     qa = legibility_report(img, spec.style, text_position=spec.text_position) if req.include_qa else None
     filename = _filename(spec).replace(".png", "-edited.png")
@@ -315,6 +335,7 @@ def edit(
     if req.output == "base64":
         return JSONResponse({"filename": filename, "mimeType": MIME,
                              "data": base64.b64encode(data).decode(),
+                             "backdrop": edited_b64, "layout": layout,
                              "qa": qa, "model": req.model})
 
     headers = {"Content-Disposition": f'attachment; filename="{filename}"'}

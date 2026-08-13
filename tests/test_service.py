@@ -567,3 +567,107 @@ def test_avatar_rejects_an_unreadable_reference():
     r = client.post("/avatar", json={"reference": "/does/not/exist.png"},
                     headers={"x-openrouter-key": "k"})
     assert r.status_code == 422
+
+
+# --------------------------------------------------------------------------- #
+# Rotation
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("element", ["subject", "headline"])
+def test_rotation_changes_the_render(element):
+    plain, _ = compose(headline="Tilt", style_name="saraev", palette="ink")
+    spun, _ = compose(headline="Tilt", style_name="saraev", palette="ink",
+                      overrides={element: {"rotate": 20}})
+    assert plain.tobytes() != spun.tobytes()
+
+
+@pytest.mark.parametrize("element", ["subject", "headline"])
+def test_rotated_boxes_stay_positive_and_grow(element):
+    """Unpacking the bounds helper wrongly once produced a negative height,
+    which silently inverted the selection box in the studio."""
+    flat = {m["id"]: m for m in compose(headline="Tilt", style_name="saraev",
+                                        palette="ink")[1]}[element]
+    spun = {m["id"]: m for m in compose(headline="Tilt", style_name="saraev", palette="ink",
+                                        overrides={element: {"rotate": 25}})[1]}[element]
+    assert spun["w"] > 0 and spun["h"] > 0, f"{element} box inverted: {spun}"
+    assert spun["w"] >= flat["w"] and spun["h"] >= flat["h"], "rotated box should grow"
+
+
+def test_rotation_is_symmetric():
+    a = {m["id"]: m for m in compose(headline="Tilt", style_name="saraev",
+                                     overrides={"subject": {"rotate": 30}})[1]}["subject"]
+    b = {m["id"]: m for m in compose(headline="Tilt", style_name="saraev",
+                                     overrides={"subject": {"rotate": -30}})[1]}["subject"]
+    assert abs(a["w"] - b["w"]) < 0.01 and abs(a["h"] - b["h"]) < 0.01
+
+
+def test_rotation_is_validated():
+    assert client.post("/generate", json={"headline": "x",
+                                          "overrides": {"subject": {"rotate": 400}}}).status_code == 422
+
+
+# --------------------------------------------------------------------------- #
+# AI edits must stay composable
+# --------------------------------------------------------------------------- #
+
+def test_supplied_background_suppresses_style_backdrop_effects(monkeypatch):
+    """An edited backdrop already carries its lighting; re-applying glow and
+    vignette on top darkens it twice and made AI edits look muddy.
+
+    Asserted on the call path rather than on pixels: on a dark preset the
+    corners are already near-black, so doubling the vignette moves the mean by
+    under one level and any pixel threshold that catches it also catches
+    ordinary resampling noise.
+    """
+    import base64 as b64, io as _io
+    from app import compositor
+
+    calls = []
+    for name in ("vignette", "radial_glow"):
+        real = getattr(compositor, name)
+        monkeypatch.setattr(compositor, name,
+                            lambda *a, _n=name, _r=real, **k: (calls.append(_n), _r(*a, **k))[1])
+
+    compose(headline="x", style_name="roberts", palette="electric")
+    assert "vignette" in calls and "radial_glow" in calls, "preset should light its own backdrop"
+
+    plate, _ = compose(headline="x", style_name="roberts", palette="electric",
+                       hidden=["subject", "headline", "arrow"])
+    buf = _io.BytesIO(); plate.save(buf, format="PNG")
+    as_bg = b64.b64encode(buf.getvalue()).decode()
+
+    calls.clear()
+    compose(headline="x", style_name="roberts", palette="electric", background=as_bg)
+    assert calls == [], f"backdrop effects re-applied over a supplied plate: {calls}"
+
+
+# --------------------------------------------------------------------------- #
+# Avatar panel, versions and the post-edit lockout
+# --------------------------------------------------------------------------- #
+
+def test_edit_sends_only_the_backdrop_by_default():
+    """Including the cutout bakes it into pixels, which is what left the studio
+    with nothing selectable after an AI edit."""
+    from app.schema import EditRequest
+    req = EditRequest(spec={"headline": "x"}, instruction="cinematic grade")
+    assert req.include_subject is False
+
+
+def test_studio_carries_the_edited_backdrop_forward():
+    """The page must re-render over the edit rather than freezing the image."""
+    assert "EDITED_BG" in PREVIEW_HTML
+    assert "body.background=EDITED_BG" in PREVIEW_HTML
+    assert "j.backdrop" in PREVIEW_HTML
+
+
+def test_studio_has_rotation_and_version_controls():
+    for hook in ("startRotate", "saveVersion", "restoreVersion", "runAvatar"):
+        assert hook in PREVIEW_HTML, f"{hook} missing from the studio"
+
+
+def test_rotation_survives_the_api():
+    r = client.post("/generate", json={"headline": "x", "output": "base64",
+                                       "include_layout": True,
+                                       "overrides": {"subject": {"rotate": -20}}})
+    assert r.status_code == 200
+    assert any(m["id"] == "subject" for m in r.json()["layout"])

@@ -21,6 +21,12 @@ class EditRequest(BaseModel):
     redraw_text: bool = Field(
         True, description="Redraw headline and arrow over the edited artwork. "
                           "Turn off only if you want the model's raw output.")
+    include_subject: bool = Field(
+        False,
+        description="Send the cutout and props to the model too. Off by default: "
+                    "editing the backdrop alone keeps every element live and "
+                    "draggable afterwards, whereas including them bakes them into "
+                    "pixels and they can no longer be moved.")
     output: Literal["binary", "base64"] = "base64"
     include_qa: bool = False
 
@@ -103,6 +109,8 @@ class ElementOverride(BaseModel):
     dx: float = Field(0.0, ge=-1.0, le=1.0, description="Horizontal delta, fraction of width.")
     dy: float = Field(0.0, ge=-1.0, le=1.0, description="Vertical delta, fraction of height.")
     scale: float = Field(1.0, gt=0.05, le=8.0, description="Size multiplier.")
+    rotate: float = Field(0.0, ge=-180.0, le=180.0,
+                          description="Degrees, anticlockwise, about the element's centre.")
     # Arrows are positioned by their endpoints rather than a box.
     from_: tuple[float, float] | None = Field(None, alias="from")
     to: tuple[float, float] | None = None

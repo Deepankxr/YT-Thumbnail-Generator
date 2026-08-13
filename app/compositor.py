@@ -85,7 +85,8 @@ def parse_color(value: str | tuple | None) -> tuple[int, int, int] | None:
 
 def _place_subjects(canvas: Image.Image, refs: list[str | None], style: Style,
                     box_rect: tuple[float, float, float, float], anchor: str,
-                    w: int, h: int) -> tuple[tuple[int, int], tuple[int, int]] | None:
+                    w: int, h: int, rotate: float = 0.0
+                    ) -> tuple[tuple[int, int], tuple[int, int]] | None:
     """Composite one or more cutouts, splitting the box into overlapping columns.
 
     Liam's group shots (four people shoulder to shoulder) need the figures to
@@ -121,6 +122,11 @@ def _place_subjects(canvas: Image.Image, refs: list[str | None], style: Style,
             fitted = img.resize((max(1, int(img.width * ratio)), band_h), Image.LANCZOS)
             centre_x = (bx + i * col_w * 0.88 + col_w / 2) * w
             origin = (int(centre_x - fitted.width / 2), int((by + bh) * h - fitted.height))
+        if rotate:
+            before = fitted.size
+            fitted = _rotate_layer(fitted, rotate)
+            origin = (origin[0] - (fitted.width - before[0]) // 2,
+                      origin[1] - (fitted.height - before[1]) // 2)
         placed = _pad_to(fitted, (w, h), origin)
 
         if style.subject_shadow:
@@ -322,7 +328,8 @@ def compose(
         ))
 
     # --- backlight --------------------------------------------------------
-    if draw_art and want("backdrop") and style.glow_color and style.glow_intensity > 0:
+    if (draw_art and want("backdrop") and not background
+            and style.glow_color and style.glow_intensity > 0):
         gc = (style.glow_center[0] * w, style.glow_center[1] * h)
         canvas.alpha_composite(
             radial_glow((w, h), gc, style.glow_radius * w * 0.5, style.glow_color, style.glow_intensity)
@@ -374,6 +381,12 @@ def compose(
                                          and not card_text and not toast_text) else style.hero_box
         box = _denorm(_shift(base_box, "hero"), w, h)
         fitted, origin = _fit(hero_layer, box, "center")
+        hero_rot = float((ov.get("hero") or {}).get("rotate", 0.0))
+        if hero_rot:
+            before = fitted.size
+            fitted = _rotate_layer(fitted, hero_rot)
+            origin = (origin[0] - (fitted.width - before[0]) // 2,
+                      origin[1] - (fitted.height - before[1]) // 2)
         if not card_text and not toast_text:
             canvas.alpha_composite(drop_shadow(
                 _pad_to(fitted, (w, h), origin), (0, int(18 * SCALE)), int(26 * SCALE), 0.45))
@@ -440,29 +453,39 @@ def compose(
             colour = parse_color(lab.get("color")) or style.text_color
             lfont = load_font(style.font_family, size, style.font_weight, style.font_width)
 
-            ldraw = ImageDraw.Draw(canvas)
+            lrot = float((ov.get(elid) or {}).get("rotate", 0.0))
+            ltarget = Image.new("RGBA", canvas.size, (0, 0, 0, 0)) if lrot else canvas
+            ldraw = ImageDraw.Draw(ltarget)
             tw = ldraw.textlength(text, font=lfont)
             ox, oy = lx * w, ly * h
 
             if lab.get("shadow", True):
                 shade = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
                 ImageDraw.Draw(shade).text((ox, oy), text, font=lfont, fill=(0, 0, 0, 150))
-                canvas.alpha_composite(shade.filter(ImageFilter.GaussianBlur(radius=int(8 * SCALE))))
+                ltarget.alpha_composite(shade.filter(ImageFilter.GaussianBlur(radius=int(8 * SCALE))))
             ldraw.text((ox, oy), text, font=lfont, fill=colour + (255,))
 
-            target = lab.get("arrow_to")
-            if target:
-                canvas.alpha_composite(hand_arrow(
+            arrow_target = lab.get("arrow_to")
+            if arrow_target:
+                ltarget.alpha_composite(hand_arrow(
                     (w, h), (ox + tw / 2, oy + size * 1.25),
-                    (float(target[0]) * w, float(target[1]) * h),
+                    (float(arrow_target[0]) * w, float(arrow_target[1]) * h),
                     parse_color(lab.get("arrow_color")) or colour,
                     width=max(3, int(5 * SCALE)), bow=float(lab.get("bow", 0.22)),
                     head_len=30.0 * SCALE,
                 ))
 
+            lx0, ly0, lx1, ly1 = ox, oy, ox + tw, oy + size * 1.25
+            if lrot:
+                canvas.alpha_composite(ltarget.rotate(
+                    lrot, resample=Image.BICUBIC,
+                    center=((lx0 + lx1) / 2, (ly0 + ly1) / 2)))
+                lx0, ly0, lx1, ly1 = _rotated_bounds(lx0, ly0, lx1, ly1, lrot)
+
             manifest.append({
                 "id": elid, "type": "label", "label": text[:18],
-                "x": ox / w, "y": oy / h, "w": tw / w, "h": size * 1.25 / h,
+                "x": lx0 / w, "y": ly0 / h,
+                "w": (lx1 - lx0) / w, "h": (ly1 - ly0) / h,
                 "font_px": size / SCALE,
             })
 
@@ -487,13 +510,16 @@ def compose(
             accent_pad_x=pill_pad_x if style.accent_fill else 0.0,
             font_width=style.font_width,
         )
+        head_rot = float((ov.get("headline") or {}).get("rotate", 0.0))
+        target = Image.new("RGBA", canvas.size, (0, 0, 0, 0)) if head_rot else canvas
+
         if style.underline_color:
-            underline(canvas, layout, style.underline_color, style.font_family,
+            underline(target, layout, style.underline_color, style.font_family,
                       style.font_weight,
                       width=int((14 if style.underline_swash else 8) * SCALE),
                       gap=int(7 * SCALE), swash=style.underline_swash)
         paint_headline(
-            canvas, layout, style.font_family, style.font_weight,
+            target, layout, style.font_family, style.font_weight,
             color=style.text_color, accent_color=style.accent_color,
             accent_fill=style.accent_fill, shadow=style.shadow,
             shadow_opacity=style.shadow_opacity,
@@ -513,6 +539,15 @@ def compose(
             right = max(r.x + r.width for r in layout.runs)
             top = min(r.y for r in layout.runs)
             bottom = max(r.y for r in layout.runs) + layout.size
+
+            if head_rot:
+                # Spin about the text's own centre, not the canvas centre, or a
+                # headline in the corner swings out of frame.
+                canvas.alpha_composite(target.rotate(
+                    head_rot, resample=Image.BICUBIC,
+                    center=((left + right) / 2, (top + bottom) / 2)))
+                left, top, right, bottom = _rotated_bounds(
+                    left, top, right, bottom, head_rot)
             manifest.append({
                 "id": "headline", "type": "text", "label": "Headline",
                 "x": left / w, "y": top / h,
@@ -538,8 +573,10 @@ def compose(
         box_rect = (1.0 - box_rect[2] - 0.02, box_rect[1], box_rect[2], box_rect[3])
         anchor = anchor.replace("left", "right")
 
-    subject_bbox = _place_subjects(canvas, refs, style, _shift(box_rect, "subject"),
-                                   anchor, w, h) if (draw_art and want("subject")) else None
+    subject_bbox = _place_subjects(
+        canvas, refs, style, _shift(box_rect, "subject"), anchor, w, h,
+        rotate=float((ov.get("subject") or {}).get("rotate", 0.0)),
+    ) if (draw_art and want("subject")) else None
     if subject_bbox:
         manifest.append({"id": "subject", "type": "image", "label": "Photo",
                          **_norm_box(subject_bbox[0], subject_bbox[1])})
@@ -548,7 +585,7 @@ def compose(
         _place_icons(canvas, icons, style, w, h)
 
     # --- vignette ---------------------------------------------------------
-    if draw_art and want("backdrop") and style.vignette_strength > 0:
+    if draw_art and want("backdrop") and not background and style.vignette_strength > 0:
         canvas.alpha_composite(vignette((w, h), style.vignette_strength))
 
     paint_vectors("front")
@@ -628,6 +665,31 @@ def _finish(canvas: Image.Image, width: int, height: int, keep_alpha: bool) -> I
 def render(**kwargs) -> Image.Image:
     """Compose and return just the image — the shape most callers want."""
     return compose(**kwargs)[0]
+
+
+def _rotated_bounds(x0: float, y0: float, x1: float, y1: float,
+                    degrees: float) -> tuple[float, float, float, float]:
+    """Axis-aligned bounds of a rectangle after rotating about its own centre.
+
+    The selection box has to grow with the rotation or the handles stop lining
+    up with the pixels the user can see.
+    """
+    rad = math.radians(-degrees)
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+    spun = [((px - cx) * math.cos(rad) - (py - cy) * math.sin(rad) + cx,
+             (px - cx) * math.sin(rad) + (py - cy) * math.cos(rad) + cy)
+            for px, py in corners]
+    xs = [p[0] for p in spun]
+    ys = [p[1] for p in spun]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _rotate_layer(layer: Image.Image, degrees: float) -> Image.Image:
+    """Rotate about the layer's own centre, expanding so corners aren't clipped."""
+    if not degrees:
+        return layer
+    return layer.rotate(degrees, resample=Image.BICUBIC, expand=True)
 
 
 def _pad_to(layer: Image.Image, size: tuple[int, int], origin: tuple[int, int]) -> Image.Image:
