@@ -8,7 +8,9 @@ and because the labels are usually the whole point of the thumbnail.
 
 from __future__ import annotations
 
+import json
 import math
+from collections import OrderedDict
 
 from PIL import Image, ImageDraw
 
@@ -70,6 +72,13 @@ def _node_tile(size: int, accent: RGB, icon_ref: str | None, dark: bool) -> Imag
     return tile
 
 
+# A diagram is fully determined by its arguments, and redrawing one costs
+# ~170ms — which is paid on every drag of an unrelated element. Memoise the
+# last few so moving the headline doesn't re-render the whole graph.
+_CACHE: OrderedDict[str, Image.Image] = OrderedDict()
+_CACHE_MAX = 12
+
+
 def node_diagram(
     width: int,
     nodes: list[dict],
@@ -89,6 +98,13 @@ def node_diagram(
     """
     if not nodes:
         raise ValueError("node_diagram needs at least one node")
+
+    key = json.dumps([width, nodes, center_icon, center_label, accent, text_color,
+                      line_color, dark, round(scale, 4)], sort_keys=True, default=str)
+    hit = _CACHE.get(key)
+    if hit is not None:
+        _CACHE.move_to_end(key)
+        return hit.copy()
 
     height = int(width * 0.72)
     canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
@@ -175,4 +191,7 @@ def node_diagram(
         ly = max(2, min(ly, height - label_px - 2))
         draw.text((lx, ly), label, font=font, fill=text_color + (255,))
 
-    return canvas
+    _CACHE[key] = canvas
+    if len(_CACHE) > _CACHE_MAX:
+        _CACHE.popitem(last=False)
+    return canvas.copy()

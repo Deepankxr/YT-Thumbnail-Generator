@@ -123,4 +123,7 @@ class ThumbnailRequest(BaseModel):
     height: int = Field(720, ge=180, le=1440)
 
     output: Literal["binary", "base64"] = "binary"
+    format: Literal["png", "jpeg"] = Field(
+        "png", description="jpeg is ~6x faster to encode and less than half the "
+                           "bytes — use it for live preview, png for the final file.")
     include_qa: bool = Field(False, description="Attach the feed-size legibility report.")

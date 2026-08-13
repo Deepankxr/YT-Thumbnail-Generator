@@ -34,6 +34,7 @@ from .schema import EditRequest, ThumbnailRequest
 from .styles import STYLES, WORD_PALETTE
 
 MIME = "image/png"
+MIME_BY_FORMAT = {"png": "image/png", "jpeg": "image/jpeg"}
 API_KEY = os.environ.get("THUMB_API_KEY", "").strip()
 
 app = FastAPI(title="Thumbnail Service", version=__version__)
@@ -261,16 +262,24 @@ def generate(req: ThumbnailRequest, x_api_key: str | None = Header(default=None)
         raise HTTPException(status_code=500, detail=f"render failed: {exc}") from exc
 
     buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
+    # optimize=True costs ~70ms to save ~4% — a bad trade for an interactive
+    # canvas, and not worth it for the final file either.
+    if req.format == "jpeg":
+        img.save(buf, format="JPEG", quality=88)
+    else:
+        img.save(buf, format="PNG")
     data = buf.getvalue()
+    mime = MIME_BY_FORMAT[req.format]
 
     qa = legibility_report(img, req.style, text_position=req.text_position) if req.include_qa else None
     filename = _filename(req)
+    if req.format == "jpeg":
+        filename = filename.rsplit(".", 1)[0] + ".jpg"
 
     if req.output == "base64":
         return JSONResponse({
             "filename": filename,
-            "mimeType": MIME,
+            "mimeType": mime,
             "data": base64.b64encode(data).decode(),
             "qa": qa,
             "layout": layout if req.include_layout else None,
@@ -280,4 +289,4 @@ def generate(req: ThumbnailRequest, x_api_key: str | None = Header(default=None)
     if qa:
         headers["x-qa-verdict"] = qa["verdict"]
         headers["x-qa-contrast"] = str(qa["headline_contrast"])
-    return Response(content=data, media_type=MIME, headers=headers)
+    return Response(content=data, media_type=mime, headers=headers)

@@ -234,8 +234,8 @@ async function boot(){
   const s=$('style');
   STYLES.forEach(st=>{const o=document.createElement('option');o.value=st.name;
     o.textContent=st.name+' \\u2014 '+st.accent;s.appendChild(o)});
-  s.onchange=()=>{fillPalettes();render()};
-  fillPalettes(); drawWords(); drawSwatches(); drawLabels(); loadEditModels(); render();
+  s.onchange=()=>{fillPalettes();schedule()};
+  fillPalettes(); drawWords(); drawSwatches(); drawLabels(); loadEditModels(); render(false);
 }
 function fillPalettes(){
   const st=STYLES.find(x=>x.name===$('style').value), p=$('palette');
@@ -246,6 +246,12 @@ function fileAsDataURL(el){
   return new Promise(res=>{ if(!el.files||!el.files[0])return res(null);
     const r=new FileReader(); r.onload=()=>res(r.result); r.readAsDataURL(el.files[0]); });
 }
+/* Photos are read once on pick. Re-reading a multi-megabyte file on every
+   render — and re-uploading it — was pure overhead on each drag. */
+const FILES={subject:null, hero:null};
+['subject','hero'].forEach(id=>{
+  $(id).addEventListener('change', async e=>{ FILES[id]=await fileAsDataURL(e.target); schedule(); });
+});
 function ovFor(id){ return OVERRIDES[id] || (OVERRIDES[id]={dx:0,dy:0,scale:1}); }
 
 /* ---------------- word colours ---------------- */
@@ -278,7 +284,7 @@ async function drawSwatches(){
 }
 function applyColor(hex){
   if(!activeWord){ $('err').textContent='Pick a word above first, then choose a colour.'; return; }
-  $('err').textContent=''; WORDCOLORS[activeWord]=hex; drawWords(); render();
+  $('err').textContent=''; WORDCOLORS[activeWord]=hex; drawWords(); schedule();
 }
 
 /* ---------------- labels ---------------- */
@@ -292,16 +298,16 @@ function drawLabels(){
     const a=document.createElement('button'); a.type='button'; a.className='tiny ghost';
     a.textContent=lab.arrow_to?'arrow':'no arrow'; a.title='Toggle this label\\u2019s arrow';
     a.onclick=()=>{ lab.arrow_to = lab.arrow_to ? null : [Math.min(0.92,lab.x+0.14), Math.min(0.92,lab.y+0.30)];
-                    drawLabels(); render(); };
+                    drawLabels(); schedule(); };
     const x=document.createElement('button'); x.type='button'; x.className='tiny ghost';
     x.textContent='\\u2715';
-    x.onclick=()=>{ LABELS.splice(i,1); delete OVERRIDES['label'+i]; drawLabels(); render(); };
+    x.onclick=()=>{ LABELS.splice(i,1); delete OVERRIDES['label'+i]; drawLabels(); schedule(); };
     row.appendChild(t); row.appendChild(a); row.appendChild(x); box.appendChild(row);
   });
 }
 $('addlabel').onclick=()=>{
   LABELS.push({text:'label', x:0.07+0.02*LABELS.length, y:0.10+0.08*LABELS.length, size:0.055});
-  drawLabels(); render();
+  drawLabels(); schedule();
 };
 
 /* ---------------- request ---------------- */
@@ -326,28 +332,51 @@ async function buildSpec(){
     body.diagram={nodes:nodes.map(n=>({label:n}))};
     const cl=$('dcenter').value.trim(); if(cl)body.diagram.center_label=cl;
   }
-  const su=await fileAsDataURL($('subject')); if(su)body.subject=su;
-  const he=await fileAsDataURL($('hero')); if(he)body.hero=he;
+  if(FILES.subject)body.subject=FILES.subject;
+  if(FILES.hero)body.hero=FILES.hero;
   return body;
 }
 
-async function render(){
+let seq=0, finalTimer=null;
+
+async function render(fast){
+  const my=++seq;
   $('err').textContent='';
+  const spec=await buildSpec();
+  if(fast){
+    // Two thirds of the pixels and a JPEG encode: ~60ms of work instead of
+    // ~180ms. Nobody can see the difference at preview size, and the full
+    // quality render lands a moment later anyway.
+    spec.width=854; spec.height=480; spec.format='jpeg'; spec.include_qa=false;
+  }
   const r=await fetch('generate',{method:'POST',headers:{'Content-Type':'application/json'},
-                                  body:JSON.stringify(await buildSpec())});
+                                  body:JSON.stringify(spec)});
+  if(my!==seq) return;    // superseded mid-flight; drop the stale frame
   if(!r.ok){ let d; try{d=(await r.json()).detail}catch(e){d=r.statusText}
              $('err').textContent='Error '+r.status+': '+(typeof d==='string'?d:JSON.stringify(d,null,1));
              return; }
-  const j=await r.json(); last=j;
-  const src='data:image/png;base64,'+j.data;
+  const j=await r.json();
+  if(my!==seq) return;
+  const src='data:'+(j.mimeType||'image/png')+';base64,'+j.data;
   $('full').src=src; $('feed').src=src;
   LAYOUT=j.layout||[]; drawOverlay();
-  const q=j.qa;
-  $('qa').innerHTML = q ? 'Feed legibility <span class="badge '+(q.verdict==='ok'?'ok':'weak')+'">'+
-      q.verdict.toUpperCase()+'</span> &nbsp; contrast '+q.headline_contrast+
-      ' &nbsp; edge energy '+q.edge_energy : '';
+  if(!fast){
+    last=j;               // only a full-quality frame is worth downloading
+    const q=j.qa;
+    $('qa').innerHTML = q ? 'Feed legibility <span class="badge '+(q.verdict==='ok'?'ok':'weak')+'">'+
+        q.verdict.toUpperCase()+'</span> &nbsp; contrast '+q.headline_contrast+
+        ' &nbsp; edge energy '+q.edge_energy : '';
+  }
 }
-function debounce(){clearTimeout(timer);timer=setTimeout(render,220)}
+
+/* Paint immediately at preview quality, then settle to full quality once the
+   user stops. This is what makes dragging feel live. */
+function schedule(){
+  render(true);
+  clearTimeout(finalTimer);
+  finalTimer=setTimeout(()=>render(false), 320);
+}
+function debounce(){clearTimeout(timer);timer=setTimeout(schedule,90)}
 
 /* ---------------- overlay ---------------- */
 function drawOverlay(){
@@ -384,7 +413,7 @@ function updateSelInfo(){
   box.innerHTML='<b>'+el.label+'</b> selected &nbsp; scale '+(o.scale||1).toFixed(2)+
     ' &nbsp; offset '+(o.dx||0).toFixed(3)+', '+(o.dy||0).toFixed(3)+
     ' <button class="tiny ghost" id="rs">Reset</button>';
-  $('rs').onclick=()=>{ delete OVERRIDES[selected]; render(); };
+  $('rs').onclick=()=>{ delete OVERRIDES[selected]; schedule(); };
 }
 
 /* ---------------- gestures ---------------- */
@@ -414,7 +443,10 @@ function startDrag(e,el,node){
   const up=ev=>{
     document.removeEventListener('pointermove',move);
     document.removeEventListener('pointerup',up);
-    node.style.transform='';
+    // Deliberately keep the transform. Clearing it here snapped the element
+    // back to its old spot until the new render arrived, which read as lag
+    // even though the drag itself was instant. drawOverlay() replaces this
+    // node with a correctly positioned one when the frame lands.
     const ddx=ev.clientX-x0, ddy=ev.clientY-y0;
     if(corner){
       const dir=(corner==='se'||corner==='ne')?1:-1;
@@ -422,11 +454,11 @@ function startDrag(e,el,node){
       if(Math.abs(f-1)<0.005) return;
       ovFor(el.id).scale=Math.min(8,Math.max(0.1,startScale*f));
     }else{
-      if(Math.abs(ddx)<2&&Math.abs(ddy)<2) return;
+      if(Math.abs(ddx)<2&&Math.abs(ddy)<2){ node.style.transform=''; return; }
       const t=ovFor(el.id);
       t.dx=(o.dx||0)+ddx/rect.width; t.dy=(o.dy||0)+ddy/rect.height;
     }
-    render();
+    schedule();
   };
   document.addEventListener('pointermove',move);
   document.addEventListener('pointerup',up);
@@ -443,7 +475,7 @@ function startArrow(e,el,which){
     e.target.style.left=(nx*100)+'%'; e.target.style.top=(ny*100)+'%';
   };
   const up=()=>{ document.removeEventListener('pointermove',move);
-                 document.removeEventListener('pointerup',up); render(); };
+                 document.removeEventListener('pointerup',up); schedule(); };
   document.addEventListener('pointermove',move);
   document.addEventListener('pointerup',up);
 }
@@ -470,7 +502,7 @@ function closeEditor(commit){
   editing=false; editor.style.display='none';
   if(commit && editor.textContent.trim()){
     $('headline').value=editor.textContent.replace(/\\n+/g,' ').trim();
-    drawWords(); render();
+    drawWords(); schedule();
   }
 }
 editor.addEventListener('keydown',e=>{
@@ -546,7 +578,7 @@ $('orgo').onclick=runEdit;
 $('orinstr').addEventListener('keydown',e=>{
   if((e.key==='Enter'||e.keyCode===13)&&!e.shiftKey){ e.preventDefault(); runEdit(); }
 });
-$('orrevert').onclick=()=>render();
+$('orrevert').onclick=()=>render(false);
 
 /* ---------------- keyboard + wiring ---------------- */
 document.addEventListener('keydown',e=>{
@@ -555,7 +587,7 @@ document.addEventListener('keydown',e=>{
   if(tag==='input'||tag==='textarea'||tag==='select') return;
   if(e.key==='Escape'){ selected=null; drawOverlay(); }
   if(!selected) return;
-  if(e.key.toLowerCase()==='r'){ delete OVERRIDES[selected]; render(); }
+  if(e.key.toLowerCase()==='r'){ delete OVERRIDES[selected]; schedule(); }
   const step=e.shiftKey?0.02:0.005;
   const map={ArrowLeft:[-step,0],ArrowRight:[step,0],ArrowUp:[0,-step],ArrowDown:[0,step]};
   if(map[e.key]){ e.preventDefault(); const t=ovFor(selected);
@@ -565,8 +597,8 @@ wrap.addEventListener('pointerdown',e=>{ if(e.target===$('full')){ selected=null
 document.querySelectorAll('#panel input,#panel select,#panel textarea').forEach(el=>{
   el.addEventListener(el.type==='file'||el.tagName==='SELECT'?'change':'input',debounce)});
 $('headline').addEventListener('input',drawWords);
-$('reset').onclick=()=>{ OVERRIDES={}; selected=null; render(); };
-$('clearcolor').onclick=()=>{ if(activeWord){ delete WORDCOLORS[activeWord]; drawWords(); render(); } };
+$('reset').onclick=()=>{ OVERRIDES={}; selected=null; schedule(); };
+$('clearcolor').onclick=()=>{ if(activeWord){ delete WORDCOLORS[activeWord]; drawWords(); schedule(); } };
 $('customhex').addEventListener('change',e=>{
   const v=e.target.value.trim();
   if(/^#?[0-9a-fA-F]{6}$/.test(v)) applyColor(v.startsWith('#')?v:'#'+v);
