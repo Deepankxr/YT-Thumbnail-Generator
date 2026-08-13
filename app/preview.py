@@ -52,6 +52,13 @@ PREVIEW_HTML = """
  #proxy{position:absolute;inset:0;display:none;pointer-events:none;will-change:transform;
         border-radius:8px;background:none!important;box-shadow:none!important}
  #overlay{position:absolute;inset:0}
+ #tools{position:absolute;display:none;gap:4px;background:#1c1f24;border:1px solid var(--line);
+        border-radius:7px;padding:4px;box-shadow:0 6px 20px rgba(0,0,0,.55);z-index:5}
+ #tools button{width:auto;margin:0;padding:5px 9px;font-size:11px;font-weight:500;
+        background:#2b2f36;border-radius:4px}
+ #tools button:hover{background:#3a404a}
+ #tools button.danger{background:#3a1d18;color:#ffb4a2}
+ #tools button.danger:hover{background:#4d2620}
  .el{position:absolute;cursor:move;border:2px solid transparent;border-radius:3px}
  .el:hover{border-color:rgba(76,141,255,.55)}
  .el.sel{border-color:var(--sel)}
@@ -179,7 +186,9 @@ PREVIEW_HTML = """
  <button class="ghost" id="reset">Reset all positions</button>
  <div class="hint">
    Drag to move &middot; corner to resize &middot; double-click the headline to type<br>
-   <kbd>Esc</kbd> deselect &middot; <kbd>R</kbd> reset &middot; <kbd>Del</kbd> delete &middot; arrows nudge
+   <kbd>Esc</kbd> deselect &middot; <kbd>R</kbd> reset &middot; <kbd>Del</kbd> delete &middot; arrows nudge<br>
+   <kbd>&#8984;Z</kbd> undo &middot; <kbd>&#8679;&#8984;Z</kbd> redo &middot; <kbd>&#8984;A</kbd> select all &middot;
+   <kbd>&#8984;D</kbd> duplicate &middot; <kbd>&#8984;S</kbd> download &middot; shift-click to add
  </div>
  <div id="err" class="err"></div>
 </div>
@@ -189,6 +198,7 @@ PREVIEW_HTML = """
    <img id="full" alt="thumbnail preview">
    <img id="proxy" alt="">
    <div id="overlay"></div>
+   <div id="tools"></div>
    <div id="editor" contenteditable="true" spellcheck="false"></div>
  </div>
  <div class="cap">Feed size &mdash; 168px, how viewers actually see it</div>
@@ -222,7 +232,8 @@ PREVIEW_HTML = """
 
 <script>
 let STYLES=[], LAYOUT=[], OVERRIDES={}, WORDCOLORS={}, LABELS=[], PALETTE=null, HIDDEN=[];
-let last=null, timer=null, selected=null, editing=false, activeWord=null, lastTap={id:null,t:0};
+let last=null, timer=null, SEL=[], editing=false, activeWord=null, lastTap={id:null,t:0};
+const isSel=id=>SEL.includes(id);
 const wrap=document.getElementById('wrap'), overlay=document.getElementById('overlay'),
       editor=document.getElementById('editor');
 const $=id=>document.getElementById(id);
@@ -366,6 +377,7 @@ async function render(fast){
   LAYOUT=j.layout||[]; drawOverlay();
   if(!fast){
     last=j;               // only a full-quality frame is worth downloading
+    pushHistory();        // settle points are the natural undo steps
     const q=j.qa;
     $('qa').innerHTML = q ? 'Feed legibility <span class="badge '+(q.verdict==='ok'?'ok':'weak')+'">'+
         q.verdict.toUpperCase()+'</span> &nbsp; contrast '+q.headline_contrast+
@@ -388,7 +400,7 @@ function drawOverlay(){
   LAYOUT.forEach(el=>{
     if(el.type==='arrow'){ drawArrow(el); return; }
     const d=document.createElement('div');
-    d.className='el'+(selected===el.id?' sel':''); d.dataset.id=el.id;
+    d.className='el'+(isSel(el.id)?' sel':''); d.dataset.id=el.id;
     d.style.left=(el.x*100)+'%'; d.style.top=(el.y*100)+'%';
     d.style.width=(el.w*100)+'%'; d.style.height=(el.h*100)+'%';
     d.innerHTML='<span class="tag">'+el.label+'</span>'+
@@ -407,20 +419,43 @@ function drawArrow(el){
     overlay.appendChild(dot);
   });
 }
-function select(id){ selected=id; drawOverlay(); }
+function select(id, additive){
+  if(additive){ SEL = isSel(id) ? SEL.filter(x=>x!==id) : SEL.concat([id]); }
+  else if(!isSel(id) || SEL.length>1){ SEL=[id]; }
+  drawOverlay();
+}
+function selectAll(){ SEL=LAYOUT.map(l=>l.id); drawOverlay(); }
+function deselect(){ SEL=[]; drawOverlay(); }
 function updateSelInfo(){
-  const box=$('selinfo');
-  const el=LAYOUT.find(e=>e.id===selected);
-  if(!selected||!el){ box.style.display='none'; return; }
-  const o=OVERRIDES[selected]||{dx:0,dy:0,scale:1};
+  const box=$('selinfo'), tools=$('tools');
+  const els=SEL.map(id=>LAYOUT.find(e=>e.id===id)).filter(Boolean);
+  if(!els.length){ box.style.display='none'; tools.style.display='none'; return; }
+
+  if(els.length===1){
+    const el=els[0], o=OVERRIDES[el.id]||{dx:0,dy:0,scale:1};
+    box.innerHTML='<b>'+el.label+'</b> selected &nbsp; scale '+(o.scale||1).toFixed(2)+
+      ' &nbsp; offset '+(o.dx||0).toFixed(3)+', '+(o.dy||0).toFixed(3);
+  }else{
+    box.innerHTML='<b>'+els.length+' elements</b> selected';
+  }
   box.style.display='block';
-  box.innerHTML='<b>'+el.label+'</b> selected &nbsp; scale '+(o.scale||1).toFixed(2)+
-    ' &nbsp; offset '+(o.dx||0).toFixed(3)+', '+(o.dy||0).toFixed(3)+
-    '<div style="margin-top:7px;display:flex;gap:6px">'+
-    '<button class="tiny ghost" id="rs">Reset</button>'+
-    '<button class="tiny ghost" id="del">Delete</button></div>';
-  $('rs').onclick=()=>{ delete OVERRIDES[selected]; schedule(); };
-  $('del').onclick=()=>deleteSelected();
+
+  // Floating toolbar over the selection. The panel button sat ~700px down the
+  // left column; nobody looking at the canvas ever found it.
+  const x0=Math.min(...els.map(e=>e.x)), y0=Math.min(...els.map(e=>e.y));
+  const below = y0 < 0.12;
+  tools.innerHTML=
+    '<button id="tdel" class="danger" title="Delete (Del)">Delete</button>'+
+    '<button id="trs" title="Reset position (R)">Reset</button>'+
+    (els.length===1&&/^label/.test(els[0].id)
+       ? '<button id="tdup" title="Duplicate (Cmd/Ctrl+D)">Duplicate</button>' : '');
+  tools.style.display='flex';
+  tools.style.left=(x0*100)+'%';
+  tools.style.top=(below ? (Math.max(...els.map(e=>e.y+e.h))*100) : (y0*100))+'%';
+  tools.style.transform= below ? 'translateY(6px)' : 'translateY(-118%)';
+  $('tdel').onclick=deleteSelected;
+  $('trs').onclick=()=>{ SEL.forEach(id=>delete OVERRIDES[id]); schedule(); };
+  if($('tdup')) $('tdup').onclick=duplicateSelected;
 }
 
 /* ---------------- drag proxy ----------------
@@ -431,7 +466,7 @@ function updateSelInfo(){
 const proxy=$('proxy');
 let proxyReady=false, proxyToken=0;
 
-async function loadProxy(id){
+async function loadProxy(ids){
   const token=++proxyToken;
   proxyReady=false;
   const base=await buildSpec();
@@ -442,8 +477,8 @@ async function loadProxy(id){
                              body:JSON.stringify(b)}).then(r=>r.ok?r.json():null);
   };
   const [back,solo]=await Promise.all([
-    mk({hidden:HIDDEN.concat([id]), format:'jpeg'}),
-    mk({only:[id]}),
+    mk({hidden:HIDDEN.concat(ids), format:'jpeg'}),
+    mk({only:ids}),
   ]);
   if(token!==proxyToken || !back || !solo) return;
   $('full').src='data:'+(back.mimeType||'image/jpeg')+';base64,'+back.data;
@@ -465,12 +500,14 @@ function startDrag(e,el,node){
   }
   lastTap={id:el.id,t:now};
   e.preventDefault(); e.stopPropagation();
-  select(el.id);
+  select(el.id, e.shiftKey);
   const corner=e.target.dataset.c;
-  loadProxy(el.id);   // in flight while the gesture starts
+  loadProxy(SEL.slice());   // in flight while the gesture starts
   const rect=wrap.getBoundingClientRect();
   const x0=e.clientX, y0=e.clientY;
-  const o=Object.assign({dx:0,dy:0,scale:1}, OVERRIDES[el.id]||{});
+  const before=Object.fromEntries(SEL.map(id=>[id,
+      Object.assign({dx:0,dy:0,scale:1}, OVERRIDES[id]||{})]));
+  const o=before[el.id]||{dx:0,dy:0,scale:1};
   const startScale=o.scale||1, startW=el.w*rect.width;
 
   const move=ev=>{
@@ -504,8 +541,10 @@ function startDrag(e,el,node){
       ovFor(el.id).scale=Math.min(8,Math.max(0.1,startScale*f));
     }else{
       if(Math.abs(ddx)<2&&Math.abs(ddy)<2){ node.style.transform=''; clearProxy(); render(true); return; }
-      const t=ovFor(el.id);
-      t.dx=(o.dx||0)+ddx/rect.width; t.dy=(o.dy||0)+ddy/rect.height;
+      SEL.forEach(id=>{
+        const t=ovFor(id), b=before[id]||{dx:0,dy:0};
+        t.dx=(b.dx||0)+ddx/rect.width; t.dy=(b.dy||0)+ddy/rect.height;
+      });
     }
     clearProxy();
     schedule();
@@ -585,7 +624,7 @@ function addMsg(kind, text, imgSrc, meta){
     const im=document.createElement('img'); im.src=imgSrc;
     im.title='Click to put this version back on the canvas';
     im.onclick=()=>{ $('full').src=imgSrc; $('feed').src=imgSrc;
-                     overlay.innerHTML=''; LAYOUT=[]; selected=null; };
+                     overlay.innerHTML=''; LAYOUT=[]; SEL=[]; $('tools').style.display='none'; };
     d.appendChild(im);
   }
   if(meta){ const m=document.createElement('div'); m.className='meta'; m.textContent=meta; d.appendChild(m); }
@@ -612,7 +651,7 @@ async function runEdit(){
     const j=await r.json();
     const src='data:image/png;base64,'+j.data;
     $('full').src=src; $('feed').src=src; last=j;
-    overlay.innerHTML=''; LAYOUT=[]; selected=null;
+    overlay.innerHTML=''; LAYOUT=[]; SEL=[]; $('tools').style.display='none';
     pending.textContent='Done.';
     const im=document.createElement('img'); im.src=src;
     im.title='Click to put this version back on the canvas';
@@ -631,17 +670,27 @@ $('orinstr').addEventListener('keydown',e=>{
 $('orrevert').onclick=()=>render(false);
 
 function deleteSelected(){
-  if(!selected) return;
-  const m=selected.match(/^label(\\d+)$/);
-  if(m){
-    // Labels are user-created, so remove them outright rather than hiding.
-    LABELS.splice(+m[1],1);
+  if(!SEL.length) return;
+  // Highest label index first, or each splice shifts the ones still to remove.
+  const labelIdx=SEL.map(id=>(id.match(/^label(\\d+)$/)||[])[1])
+                    .filter(v=>v!==undefined).map(Number).sort((a,b)=>b-a);
+  labelIdx.forEach(i=>LABELS.splice(i,1));
+  if(labelIdx.length){
     Object.keys(OVERRIDES).filter(k=>k.startsWith('label')).forEach(k=>delete OVERRIDES[k]);
     drawLabels();
-  }else if(!HIDDEN.includes(selected)){
-    HIDDEN.push(selected);
   }
-  selected=null; clearProxy(); updateHiddenChip(); schedule();
+  SEL.filter(id=>!/^label\\d+$/.test(id)).forEach(id=>{
+    if(!HIDDEN.includes(id)) HIDDEN.push(id);
+  });
+  SEL=[]; clearProxy(); updateHiddenChip(); schedule();
+}
+
+function duplicateSelected(){
+  const m=(SEL[0]||'').match(/^label(\\d+)$/);
+  if(!m) return;
+  const src=LABELS[+m[1]]; if(!src) return;
+  LABELS.push(Object.assign({},src,{x:Math.min(0.9,src.x+0.04), y:Math.min(0.9,src.y+0.06)}));
+  SEL=[]; drawLabels(); schedule();
 }
 function updateHiddenChip(){
   const el=$('hiddenchip');
@@ -652,25 +701,76 @@ function updateHiddenChip(){
   $('unhide').onclick=()=>{ HIDDEN=[]; updateHiddenChip(); schedule(); };
 }
 
+/* ---------------- history ----------------
+   Snapshot the whole editable state rather than diffing individual actions:
+   the state is small, and it means undo covers typing, colours, deletions and
+   drags with one mechanism instead of four. */
+const FIELDS=['headline','accent','textpos','side','card','cardname','cardhandle',
+              'toastt','toasta','dnodes','dcenter','style','palette'];
+let HIST=[], HPTR=-1, restoring=false;
+
+function snapshot(){
+  const f={}; FIELDS.forEach(id=>f[id]=$(id).value);
+  return JSON.stringify({f, arrow:$('arrow').checked, ov:OVERRIDES,
+                         hid:HIDDEN, lab:LABELS, wc:WORDCOLORS});
+}
+function pushHistory(){
+  if(restoring) return;
+  const snap=snapshot();
+  if(HIST[HPTR]===snap) return;
+  HIST=HIST.slice(0,HPTR+1);
+  HIST.push(snap);
+  if(HIST.length>60) HIST.shift();
+  HPTR=HIST.length-1;
+}
+async function applyHistory(step){
+  const next=HPTR+step;
+  if(next<0||next>=HIST.length) return;
+  HPTR=next;
+  const st=JSON.parse(HIST[HPTR]);
+  restoring=true;
+  FIELDS.forEach(id=>{ if(st.f[id]!==undefined) $(id).value=st.f[id]; });
+  fillPalettes(); $('palette').value=st.f.palette;
+  $('arrow').checked=st.arrow;
+  OVERRIDES=st.ov; HIDDEN=st.hid; LABELS=st.lab; WORDCOLORS=st.wc;
+  SEL=[]; drawWords(); drawLabels(); updateHiddenChip();
+  restoring=false;
+  await render(false);
+}
+
 /* ---------------- keyboard + wiring ---------------- */
 document.addEventListener('keydown',e=>{
+  // Command shortcuts work everywhere except inside the inline text editor,
+  // where the browser's own editing shortcuts should win.
+  const mod=e.metaKey||e.ctrlKey;
+  if(mod && !editing){
+    const k=e.key.toLowerCase();
+    if(k==='z'){ e.preventDefault(); applyHistory(e.shiftKey?1:-1); return; }
+    if(k==='y'){ e.preventDefault(); applyHistory(1); return; }
+    if(k==='a'){ e.preventDefault(); selectAll(); return; }
+    if(k==='d'){ e.preventDefault(); duplicateSelected(); return; }
+    if(k==='s'){ e.preventDefault(); $('dl').click(); return; }
+    if(k==='backspace'||k==='delete'){ e.preventDefault(); deleteSelected(); return; }
+  }
   if(editing) return;
   const tag=(e.target.tagName||'').toLowerCase();
   if(tag==='input'||tag==='textarea'||tag==='select') return;
-  if(e.key==='Escape'){ selected=null; drawOverlay(); }
-  if(!selected) return;
+  if(e.key==='Escape'){ deselect(); return; }
+  if(!SEL.length) return;
   if(e.key==='Delete'||e.key==='Backspace'){ e.preventDefault(); deleteSelected(); return; }
-  if(e.key.toLowerCase()==='r'){ delete OVERRIDES[selected]; schedule(); }
+  if(e.key.toLowerCase()==='r'){ SEL.forEach(id=>delete OVERRIDES[id]); schedule(); }
   const step=e.shiftKey?0.02:0.005;
   const map={ArrowLeft:[-step,0],ArrowRight:[step,0],ArrowUp:[0,-step],ArrowDown:[0,step]};
-  if(map[e.key]){ e.preventDefault(); const t=ovFor(selected);
-    t.dx=(t.dx||0)+map[e.key][0]; t.dy=(t.dy||0)+map[e.key][1]; debounce(); }
+  if(map[e.key]){ e.preventDefault();
+    SEL.forEach(id=>{ const t=ovFor(id);
+      t.dx=(t.dx||0)+map[e.key][0]; t.dy=(t.dy||0)+map[e.key][1]; });
+    debounce(); }
 });
-wrap.addEventListener('pointerdown',e=>{ if(e.target===$('full')){ selected=null; drawOverlay(); }});
+wrap.addEventListener('pointerdown',e=>{ if(e.target===$('full')||e.target===proxy){ deselect(); }});
 document.querySelectorAll('#panel input,#panel select,#panel textarea').forEach(el=>{
   el.addEventListener(el.type==='file'||el.tagName==='SELECT'?'change':'input',debounce)});
 $('headline').addEventListener('input',drawWords);
-$('reset').onclick=()=>{ OVERRIDES={}; HIDDEN=[]; selected=null; updateHiddenChip(); schedule(); };
+$('reset').onclick=()=>{ OVERRIDES={}; HIDDEN=[]; SEL=[]; updateHiddenChip(); schedule(); };
 $('clearcolor').onclick=()=>{ if(activeWord){ delete WORDCOLORS[activeWord]; drawWords(); schedule(); } };
 $('customhex').addEventListener('change',e=>{
   const v=e.target.value.trim();
