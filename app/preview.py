@@ -49,6 +49,8 @@ PREVIEW_HTML = """
  #wrap{position:relative;width:100%;max-width:980px;user-select:none}
  #wrap img{display:block;width:100%;border-radius:8px;background:#000;
            box-shadow:0 8px 34px rgba(0,0,0,.5)}
+ #proxy{position:absolute;inset:0;display:none;pointer-events:none;will-change:transform;
+        border-radius:8px;background:none!important;box-shadow:none!important}
  #overlay{position:absolute;inset:0}
  .el{position:absolute;cursor:move;border:2px solid transparent;border-radius:3px}
  .el:hover{border-color:rgba(76,141,255,.55)}
@@ -139,6 +141,7 @@ PREVIEW_HTML = """
  <div class="chk"><input type="checkbox" id="arrow" checked><label for="arrow">Show arrow</label></div>
 
  <div id="selinfo"></div>
+ <div id="hiddenchip" class="sub" style="display:none;margin-top:8px"></div>
 
  <hr>
  <h2>Labels</h2>
@@ -176,7 +179,7 @@ PREVIEW_HTML = """
  <button class="ghost" id="reset">Reset all positions</button>
  <div class="hint">
    Drag to move &middot; corner to resize &middot; double-click the headline to type<br>
-   <kbd>Esc</kbd> deselect &middot; <kbd>R</kbd> reset selected &middot; arrows nudge
+   <kbd>Esc</kbd> deselect &middot; <kbd>R</kbd> reset &middot; <kbd>Del</kbd> delete &middot; arrows nudge
  </div>
  <div id="err" class="err"></div>
 </div>
@@ -184,6 +187,7 @@ PREVIEW_HTML = """
 <div id="stage">
  <div id="wrap">
    <img id="full" alt="thumbnail preview">
+   <img id="proxy" alt="">
    <div id="overlay"></div>
    <div id="editor" contenteditable="true" spellcheck="false"></div>
  </div>
@@ -217,7 +221,7 @@ PREVIEW_HTML = """
 </div>
 
 <script>
-let STYLES=[], LAYOUT=[], OVERRIDES={}, WORDCOLORS={}, LABELS=[], PALETTE=null;
+let STYLES=[], LAYOUT=[], OVERRIDES={}, WORDCOLORS={}, LABELS=[], PALETTE=null, HIDDEN=[];
 let last=null, timer=null, selected=null, editing=false, activeWord=null, lastTap={id:null,t:0};
 const wrap=document.getElementById('wrap'), overlay=document.getElementById('overlay'),
       editor=document.getElementById('editor');
@@ -315,7 +319,7 @@ async function buildSpec(){
   const body={
     headline:$('headline').value||' ', style:$('style').value, palette:$('palette').value,
     accent_words:$('accent').value.split(',').map(s=>s.trim()).filter(Boolean),
-    word_colors:WORDCOLORS, arrow:$('arrow').checked, overrides:OVERRIDES,
+    word_colors:WORDCOLORS, arrow:$('arrow').checked, overrides:OVERRIDES, hidden:HIDDEN,
     labels:LABELS.filter(l=>(l.text||'').trim()),
     output:'base64', include_qa:true, include_layout:true
   };
@@ -412,8 +416,44 @@ function updateSelInfo(){
   box.style.display='block';
   box.innerHTML='<b>'+el.label+'</b> selected &nbsp; scale '+(o.scale||1).toFixed(2)+
     ' &nbsp; offset '+(o.dx||0).toFixed(3)+', '+(o.dy||0).toFixed(3)+
-    ' <button class="tiny ghost" id="rs">Reset</button>';
+    '<div style="margin-top:7px;display:flex;gap:6px">'+
+    '<button class="tiny ghost" id="rs">Reset</button>'+
+    '<button class="tiny ghost" id="del">Delete</button></div>';
   $('rs').onclick=()=>{ delete OVERRIDES[selected]; schedule(); };
+  $('del').onclick=()=>deleteSelected();
+}
+
+/* ---------------- drag proxy ----------------
+   Dragging used to move an empty outline while the picture sat frozen until
+   release. Now the element is fetched as its own transparent layer and the rest
+   as a backdrop, so the real pixels track the cursor with no network in the
+   gesture at all. */
+const proxy=$('proxy');
+let proxyReady=false, proxyToken=0;
+
+async function loadProxy(id){
+  const token=++proxyToken;
+  proxyReady=false;
+  const base=await buildSpec();
+  const mk=extra=>{
+    const b=Object.assign({},base,extra);
+    b.width=854; b.height=480; b.include_qa=false; b.include_layout=false;
+    return fetch('generate',{method:'POST',headers:{'Content-Type':'application/json'},
+                             body:JSON.stringify(b)}).then(r=>r.ok?r.json():null);
+  };
+  const [back,solo]=await Promise.all([
+    mk({hidden:HIDDEN.concat([id]), format:'jpeg'}),
+    mk({only:[id]}),
+  ]);
+  if(token!==proxyToken || !back || !solo) return;
+  $('full').src='data:'+(back.mimeType||'image/jpeg')+';base64,'+back.data;
+  proxy.src='data:image/png;base64,'+solo.data;
+  proxy.style.display='block';
+  proxyReady=true;
+}
+function clearProxy(){
+  proxyToken++; proxyReady=false;
+  proxy.style.display='none'; proxy.style.transform=''; proxy.removeAttribute('src');
 }
 
 /* ---------------- gestures ---------------- */
@@ -427,6 +467,7 @@ function startDrag(e,el,node){
   e.preventDefault(); e.stopPropagation();
   select(el.id);
   const corner=e.target.dataset.c;
+  loadProxy(el.id);   // in flight while the gesture starts
   const rect=wrap.getBoundingClientRect();
   const x0=e.clientX, y0=e.clientY;
   const o=Object.assign({dx:0,dy:0,scale:1}, OVERRIDES[el.id]||{});
@@ -438,7 +479,15 @@ function startDrag(e,el,node){
       const dir=(corner==='se'||corner==='ne')?1:-1;
       const f=Math.max(0.15,(startW+dir*ddx)/Math.max(startW,1));
       node.style.transform='scale('+f+')'; node.style.transformOrigin='center';
-    }else node.style.transform='translate('+ddx+'px,'+ddy+'px)';
+      if(proxyReady){
+        // Scale about the element's own centre, not the canvas centre.
+        proxy.style.transformOrigin=((el.x+el.w/2)*100)+'% '+((el.y+el.h/2)*100)+'%';
+        proxy.style.transform='scale('+f+')';
+      }
+    }else{
+      node.style.transform='translate('+ddx+'px,'+ddy+'px)';
+      if(proxyReady) proxy.style.transform='translate('+ddx+'px,'+ddy+'px)';
+    }
   };
   const up=ev=>{
     document.removeEventListener('pointermove',move);
@@ -454,10 +503,11 @@ function startDrag(e,el,node){
       if(Math.abs(f-1)<0.005) return;
       ovFor(el.id).scale=Math.min(8,Math.max(0.1,startScale*f));
     }else{
-      if(Math.abs(ddx)<2&&Math.abs(ddy)<2){ node.style.transform=''; return; }
+      if(Math.abs(ddx)<2&&Math.abs(ddy)<2){ node.style.transform=''; clearProxy(); render(true); return; }
       const t=ovFor(el.id);
       t.dx=(o.dx||0)+ddx/rect.width; t.dy=(o.dy||0)+ddy/rect.height;
     }
+    clearProxy();
     schedule();
   };
   document.addEventListener('pointermove',move);
@@ -580,6 +630,28 @@ $('orinstr').addEventListener('keydown',e=>{
 });
 $('orrevert').onclick=()=>render(false);
 
+function deleteSelected(){
+  if(!selected) return;
+  const m=selected.match(/^label(\\d+)$/);
+  if(m){
+    // Labels are user-created, so remove them outright rather than hiding.
+    LABELS.splice(+m[1],1);
+    Object.keys(OVERRIDES).filter(k=>k.startsWith('label')).forEach(k=>delete OVERRIDES[k]);
+    drawLabels();
+  }else if(!HIDDEN.includes(selected)){
+    HIDDEN.push(selected);
+  }
+  selected=null; clearProxy(); updateHiddenChip(); schedule();
+}
+function updateHiddenChip(){
+  const el=$('hiddenchip');
+  if(!HIDDEN.length){ el.style.display='none'; return; }
+  el.style.display='block';
+  el.innerHTML='Hidden: '+HIDDEN.join(', ')+
+    ' <button class="tiny ghost" id="unhide">Restore all</button>';
+  $('unhide').onclick=()=>{ HIDDEN=[]; updateHiddenChip(); schedule(); };
+}
+
 /* ---------------- keyboard + wiring ---------------- */
 document.addEventListener('keydown',e=>{
   if(editing) return;
@@ -587,6 +659,7 @@ document.addEventListener('keydown',e=>{
   if(tag==='input'||tag==='textarea'||tag==='select') return;
   if(e.key==='Escape'){ selected=null; drawOverlay(); }
   if(!selected) return;
+  if(e.key==='Delete'||e.key==='Backspace'){ e.preventDefault(); deleteSelected(); return; }
   if(e.key.toLowerCase()==='r'){ delete OVERRIDES[selected]; schedule(); }
   const step=e.shiftKey?0.02:0.005;
   const map={ArrowLeft:[-step,0],ArrowRight:[step,0],ArrowUp:[0,-step],ArrowDown:[0,step]};
@@ -597,7 +670,7 @@ wrap.addEventListener('pointerdown',e=>{ if(e.target===$('full')){ selected=null
 document.querySelectorAll('#panel input,#panel select,#panel textarea').forEach(el=>{
   el.addEventListener(el.type==='file'||el.tagName==='SELECT'?'change':'input',debounce)});
 $('headline').addEventListener('input',drawWords);
-$('reset').onclick=()=>{ OVERRIDES={}; selected=null; schedule(); };
+$('reset').onclick=()=>{ OVERRIDES={}; HIDDEN=[]; selected=null; updateHiddenChip(); schedule(); };
 $('clearcolor').onclick=()=>{ if(activeWord){ delete WORDCOLORS[activeWord]; drawWords(); schedule(); } };
 $('customhex').addEventListener('change',e=>{
   const v=e.target.value.trim();

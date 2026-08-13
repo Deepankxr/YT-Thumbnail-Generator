@@ -252,6 +252,8 @@ def generate(req: ThumbnailRequest, x_api_key: str | None = Header(default=None)
             text_position=req.text_position,
             overrides={k: v.model_dump(by_alias=True, exclude_none=True)
                        for k, v in req.overrides.items()},
+            hidden=req.hidden,
+            only=req.only,
             width=req.width,
             height=req.height,
         )
@@ -264,18 +266,19 @@ def generate(req: ThumbnailRequest, x_api_key: str | None = Header(default=None)
     buf = io.BytesIO()
     # optimize=True costs ~70ms to save ~4% — a bad trade for an interactive
     # canvas, and not worth it for the final file either.
-    if req.format == "jpeg":
+    fmt = "png" if req.only else req.format
+    if fmt == "jpeg":
         img.save(buf, format="JPEG", quality=88)
     else:
         img.save(buf, format="PNG")
     data = buf.getvalue()
-    mime = MIME_BY_FORMAT[req.format]
+    mime = MIME_BY_FORMAT[fmt]
 
     qa = (legibility_report(img, req.style, text_position=req.text_position,
                             has_diagram=bool(req.diagram and req.diagram.nodes))
           if req.include_qa else None)
     filename = _filename(req)
-    if req.format == "jpeg":
+    if fmt == "jpeg":
         filename = filename.rsplit(".", 1)[0] + ".jpg"
 
     if req.output == "base64":

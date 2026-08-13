@@ -113,6 +113,15 @@ class ThumbnailRequest(BaseModel):
         description="Per-element nudges from the preset, keyed by element id "
                     "(headline, subject, hero, arrow). Offsets are deltas so "
                     "the intent survives a style change.")
+    hidden: list[str] = Field(
+        default_factory=list,
+        description="Element ids to drop (headline, subject, hero, arrow, icons, "
+                    "label0...). This is how deletion works.")
+    only: list[str] = Field(
+        default_factory=list,
+        description="Render only these ids, on transparency. With `hidden` this "
+                    "splits a frame into backdrop + isolated layer, which is what "
+                    "lets the studio drag real pixels without a round trip.")
     include_layout: bool = Field(
         False, description="Return where each element landed, for drawing "
                            "direct-manipulation handles.")

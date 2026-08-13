@@ -212,6 +212,8 @@ def compose(
     subject_side: str | None = None,
     text_position: str | None = None,
     overrides: dict | None = None,
+    hidden: list[str] | None = None,
+    only: list[str] | None = None,
     draw_art: bool = True,
     draw_vector: bool = True,
     width: int = BASE_W,
@@ -235,11 +237,23 @@ def compose(
     the artwork without touching the typography: compose the plate with
     draw_vector=False, send that to a model, then compose again over the result
     with draw_art=False to lay exact text back on top.
+
+    `hidden` drops elements by id — that is how deletion works.
+
+    `only` renders just the named elements on transparency. Paired with
+    `hidden`, it splits a frame into "everything except X" and "X alone", which
+    is what lets the studio drag real pixels at 60fps instead of dragging an
+    empty outline and waiting for a round trip.
     """
     style: Style = get_style(style_name, palette)
     w, h = width * SCALE, height * SCALE
     ov = overrides or {}
+    hide = set(hidden or [])
+    solo = set(only or [])
     manifest: list[dict] = []
+
+    def want(elid: str) -> bool:
+        return (elid in solo) if solo else (elid not in hide)
 
     def _norm_box(origin: tuple[int, int], size: tuple[int, int]) -> dict:
         return {"x": origin[0] / w, "y": origin[1] / h,
@@ -260,7 +274,9 @@ def compose(
         return (x + float(o.get("dx") or 0.0), y + float(o.get("dy") or 0.0), bw, bh)
 
     # --- background -------------------------------------------------------
-    if background:
+    if not want("backdrop"):
+        canvas = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    elif background:
         plate = load_image(background)
         assert plate is not None
         plate, origin = _fit(plate, (0, 0, w, h), "center")
@@ -282,7 +298,7 @@ def compose(
         canvas = Image.new("RGBA", (w, h), (0, 0, 0, 0))
 
     # --- backlight --------------------------------------------------------
-    if draw_art and style.glow_color and style.glow_intensity > 0:
+    if draw_art and want("backdrop") and style.glow_color and style.glow_intensity > 0:
         gc = (style.glow_center[0] * w, style.glow_center[1] * h)
         canvas.alpha_composite(
             radial_glow((w, h), gc, style.glow_radius * w * 0.5, style.glow_color, style.glow_intensity)
@@ -290,7 +306,7 @@ def compose(
 
     # --- hero visual / rendered prop --------------------------------------
     hero_layer: Image.Image | None = None
-    if not draw_art:
+    if not draw_art or not want("hero"):
         hero_layer = None
     elif hero:
         hero_img = load_image(hero)
@@ -346,16 +362,16 @@ def compose(
         anchor = anchor.replace("left", "right")
 
     subject_bbox = _place_subjects(canvas, refs, style, _shift(box_rect, "subject"),
-                                   anchor, w, h) if draw_art else None
+                                   anchor, w, h) if (draw_art and want("subject")) else None
     if subject_bbox:
         manifest.append({"id": "subject", "type": "image", "label": "Photo",
                          **_norm_box(subject_bbox[0], subject_bbox[1])})
 
-    if icons and draw_art:
+    if icons and draw_art and want("icons"):
         _place_icons(canvas, icons, style, w, h)
 
     # --- vignette ---------------------------------------------------------
-    if draw_art and style.vignette_strength > 0:
+    if draw_art and want("backdrop") and style.vignette_strength > 0:
         canvas.alpha_composite(vignette((w, h), style.vignette_strength))
 
     # --- scrim behind the headline ----------------------------------------
@@ -364,11 +380,11 @@ def compose(
         scrim_dir = "top"
     elif text_position == "bottom":
         scrim_dir = "bottom"
-    if draw_vector and scrim_dir and style.scrim_opacity > 0:
+    if draw_vector and want("backdrop") and scrim_dir and style.scrim_opacity > 0:
         canvas.alpha_composite(scrim((w, h), scrim_dir, style.scrim_opacity))
 
     # --- arrow ------------------------------------------------------------
-    if arrow and draw_vector:
+    if arrow and draw_vector and want("arrow"):
         a_ov = ov.get("arrow") or {}
         n_from = tuple(a_ov.get("from") or style.arrow_from)
         n_to = tuple(a_ov.get("to") or style.arrow_to)
@@ -390,7 +406,7 @@ def compose(
     # at something with its own arrow.
     for i, lab in enumerate(labels or []):
         text = str(lab.get("text", "")).strip()
-        if not text or not draw_vector:
+        if not text or not draw_vector or not want(f"label{i}"):
             continue
         lx = float(lab.get("x", 0.1)) + float((ov.get(f"label{i}") or {}).get("dx", 0.0))
         ly = float(lab.get("y", 0.1)) + float((ov.get(f"label{i}") or {}).get("dy", 0.0))
@@ -426,8 +442,8 @@ def compose(
         })
 
     # --- headline ---------------------------------------------------------
-    if not draw_vector:
-        return canvas.convert("RGB").resize((width, height), Image.LANCZOS), manifest
+    if not draw_vector or not want("headline"):
+        return _finish(canvas, width, height, bool(solo)), manifest
 
     copy = _apply_case(headline, style.text_case)
     text_rect = style.text_box
@@ -489,7 +505,14 @@ def compose(
             "color": "#%02x%02x%02x" % style.text_color,
         })
 
-    return canvas.convert("RGB").resize((width, height), Image.LANCZOS), manifest
+    return _finish(canvas, width, height, bool(solo)), manifest
+
+
+def _finish(canvas: Image.Image, width: int, height: int, keep_alpha: bool) -> Image.Image:
+    """Downsample to output size. Isolated layers keep alpha so they can be
+    composited over the backdrop in the browser."""
+    out = canvas.resize((width, height), Image.LANCZOS)
+    return out if keep_alpha else out.convert("RGB")
 
 
 def render(**kwargs) -> Image.Image:

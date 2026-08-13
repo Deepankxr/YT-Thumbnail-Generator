@@ -41,7 +41,11 @@ uvicorn app.main:app --reload --port 8080
 
 Then open **http://localhost:8080/preview** for the studio: controls on the left,
 canvas in the middle, AI chat on the right. Click anything on the canvas to move,
-resize or retype it; the full-size and feed-size previews update as you go.
+resize, retype or delete it; the full-size and feed-size previews update as you go.
+
+Dragging moves the real pixels, not an outline. On mouse-down the element is
+fetched as its own transparent layer and the rest as a backdrop, so the gesture
+runs entirely in the browser — no network between mouse-down and release.
 
 ## Endpoints
 
@@ -105,6 +109,8 @@ The presets are a starting point, not a cage. Every knob below is per-request.
 | `diagram` | Hub-and-spoke node diagram — central icon, dashed connectors, labelled nodes |
 | `card_name` / `card_handle` | Identity on the social card prop — use your own, not the reference channel's |
 | `subject_side` | Flip the cutout left or right |
+| `hidden` | Drop elements by id (`headline`, `subject`, `hero`, `arrow`, `icons`, `label0`…). Deletion in the studio; restorable |
+| `only` | Render just these ids on transparency. With `hidden` it splits a frame into backdrop + isolated layer |
 | `palette` | Swap the background. Light palettes auto-flip type, arrow and scrim to dark via a luminance test |
 
 Typography is driven off variable-font axes, so `ottley`'s compressed caps come
