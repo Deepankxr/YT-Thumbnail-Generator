@@ -35,6 +35,16 @@ class AnalyzeRequest(BaseModel):
         True, description="Return the reference image too, for side-by-side comparison.")
 
 
+class AvatarRequest(BaseModel):
+    """Generate a presenter cutout from a reference photo of the same person."""
+
+    reference: str = Field(..., description="Photo of the person: URL, data URI, base64 or path.")
+    pose: str = Field("point-left", description="See GET /avatar/poses.")
+    model: str = Field("google/gemini-3-pro-image", description="OpenRouter image model id.")
+    extra: str = Field("", max_length=400, description="Extra direction appended to the prompt.")
+    height: int = Field(1400, ge=400, le=2400)
+
+
 class Label(BaseModel):
     """A free-standing caption, optionally pointing at something."""
 
@@ -63,6 +73,8 @@ class Diagram(BaseModel):
     accent: str | None = Field(None, description="Node colour; defaults to the style accent.")
     layout: Literal["hub", "cycle"] = Field(
         "hub", description="hub = spokes from a centre; cycle = a loop of arrows.")
+    mark: Literal["tile", "pixel"] = Field(
+        "tile", description="Node artwork when no icon is supplied.")
     frame: Literal["tablet"] | None = Field(
         None, description="Mount the diagram on a screen inside a device bezel.")
     frame_glow: str | None = Field(None, description="Halo colour around the device.")

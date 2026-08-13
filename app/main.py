@@ -27,11 +27,13 @@ from PIL import Image
 from . import __version__
 from .analyze import VISION_MODELS, analyze, fetch_thumbnail, video_id
 from .assets import FONT_DIR, FONT_FILES
+from .avatar import POSES, generate_avatar
+from .assets import load_image
 from .compositor import compose, legibility_report
 from .openrouter import OpenRouterError, edit_image, list_models
 from .preview import PREVIEW_HTML
 from .hero import HeroUnavailable, generate_hero
-from .schema import AnalyzeRequest, EditRequest, ThumbnailRequest
+from .schema import AnalyzeRequest, AvatarRequest, EditRequest, ThumbnailRequest
 from .styles import STYLES, WORD_PALETTE
 
 MIME = "image/png"
@@ -135,6 +137,59 @@ def edit_models():
 def analyze_models():
     """Vision models offered for reading a reference thumbnail."""
     return {"models": [{"id": i, "label": l, "note": n} for i, l, n in VISION_MODELS]}
+
+
+@app.get("/avatar/poses")
+def avatar_poses():
+    """Poses the avatar generator understands."""
+    return {"poses": [{"id": k, "description": v} for k, v in POSES.items()]}
+
+
+@app.post("/avatar")
+def avatar(
+    req: AvatarRequest,
+    x_api_key: str | None = Header(default=None),
+    x_openrouter_key: str | None = Header(default=None),
+):
+    """Generate a presenter cutout from a reference photo, matted and trimmed.
+
+    A real photograph beats this on likeness, cost and consistency — generated
+    faces drift between runs, so a channel built on them slowly stops looking
+    like one person. Use it for poses you have not shot, or for a deliberately
+    stylised look.
+    """
+    _check_key(x_api_key)
+    key = (x_openrouter_key or "").strip()
+    if not key:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing x-openrouter-key header. Avatar generation bills to "
+                   "your own OpenRouter key; this service never stores it.")
+
+    if req.pose not in POSES and not req.extra:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unknown pose '{req.pose}'; choose one of {sorted(POSES)} "
+                   "or supply `extra` to describe your own")
+
+    try:
+        ref = load_image(req.reference)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"could not read the reference: {exc}") from exc
+    if ref is None:
+        raise HTTPException(status_code=422, detail="no reference image supplied")
+
+    buf = io.BytesIO()
+    ref.convert("RGB").save(buf, format="PNG")
+    ref_b64 = base64.b64encode(buf.getvalue()).decode()
+
+    try:
+        data, report = generate_avatar(ref_b64, key, pose=req.pose, model=req.model,
+                                       extra=req.extra, height=req.height)
+    except OpenRouterError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return {"data": data, "mimeType": "image/png", "report": report}
 
 
 @app.post("/analyze")

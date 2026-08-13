@@ -15,6 +15,7 @@ from collections import OrderedDict
 from PIL import Image, ImageDraw, ImageFilter
 
 from .assets import load_font, load_image
+from .marks import robot as pixel_robot
 from .shapes import drop_shadow, hand_arrow, rounded_rect
 
 RGB = tuple[int, int, int]
@@ -40,7 +41,8 @@ def _dashed_line(draw: ImageDraw.ImageDraw, start, end, color: RGB,
         pos += dash + gap
 
 
-def _node_tile(size: int, accent: RGB, icon_ref: str | None, dark: bool) -> Image.Image:
+def _node_tile(size: int, accent: RGB, icon_ref: str | None, dark: bool,
+               mark: str = "tile") -> Image.Image:
     """One spoke node: a rounded tile with either a supplied icon or a glyph."""
     tile = rounded_rect((size, size), int(size * 0.24),
                         (accent + (255,)) if icon_ref is None else (0, 0, 0, 0))
@@ -54,6 +56,11 @@ def _node_tile(size: int, accent: RGB, icon_ref: str | None, dark: bool) -> Imag
             sheet = Image.new("RGBA", (size, size), (0, 0, 0, 0))
             sheet.paste(icon, ((size - icon.width) // 2, (size - icon.height) // 2))
             return sheet
+
+    if mark == "pixel":
+        # Pixel-art rather than a rounded tile: hard edges survive being scaled
+        # into a thumbnail, and three of them read as one set.
+        return pixel_robot(size, body=accent)
 
     # Generic bot mark, so a diagram still reads before real icons exist.
     d = ImageDraw.Draw(tile)
@@ -91,6 +98,7 @@ def node_diagram(
     dark: bool = True,
     scale: float = 1.0,
     layout: str = "hub",
+    mark: str = "tile",
     frame: str | None = None,
     frame_glow: RGB | None = None,
     screen: RGB = (255, 255, 255),
@@ -111,8 +119,8 @@ def node_diagram(
         raise ValueError("node_diagram needs at least one node")
 
     key = json.dumps([width, nodes, center_icon, center_label, accent, text_color,
-                      line_color, dark, round(scale, 4), layout, frame, frame_glow,
-                      screen], sort_keys=True, default=str)
+                      line_color, dark, round(scale, 4), layout, mark, frame,
+                      frame_glow, screen], sort_keys=True, default=str)
     hit = _CACHE.get(key)
     if hit is not None:
         _CACHE.move_to_end(key)
@@ -126,7 +134,7 @@ def node_diagram(
 
     cx, cy = width / 2, height / 2
     hub = int(width * 0.155 * scale)
-    tile = int(width * 0.098 * scale)
+    tile = int(width * (0.145 if mark == "pixel" else 0.098) * scale)
     label_px = max(11, int(width * 0.032 * scale))
     font = load_font("inter", label_px, "SemiBold")
 
@@ -204,7 +212,7 @@ def node_diagram(
 
     # Nodes and their labels
     for (px, py), node in zip(positions, nodes):
-        t = _node_tile(tile, accent, node.get("icon"), dark)
+        t = _node_tile(tile, accent, node.get("icon"), dark, mark)
         sheet = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
         sheet.paste(t, (int(px - tile / 2), int(py - tile / 2)))
         canvas.alpha_composite(drop_shadow(sheet, (0, int(4 * scale)), int(10 * scale), 0.45))

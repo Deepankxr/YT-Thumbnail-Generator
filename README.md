@@ -56,6 +56,7 @@ runs entirely in the browser — no network between mouse-down and release.
 | GET | `/styles` | Presets, palettes, font and accent treatment |
 | POST | `/generate` | Render a thumbnail |
 | POST | `/analyze` | Read a reference thumbnail from a YouTube link, return a spec |
+| POST | `/avatar` | Generate a presenter cutout from a reference photo of the same person |
 | POST | `/edit` | Edit the artwork with a model, keeping typography exact |
 
 Set `THUMB_API_KEY` to require an `x-api-key` header.
@@ -194,6 +195,28 @@ worst — small UI text comes out as gibberish. `app/cards.py` draws them:
 - `tile` → a repeating grid of icons with optional crosses, as a backdrop
 
 Always legible, always free, and editable after the fact.
+
+## Generated avatars, and why a photo usually wins
+
+`POST /avatar` takes a photo of you, has an image model produce a studio
+portrait of the same person in a chosen pose (`GET /avatar/poses`), then mattes
+and trims it into a `subject` cutout.
+
+It is genuinely useful for a pose you have not shot. It is not a replacement for
+photography, and the README should say so plainly:
+
+| | Real photo | Generated avatar |
+|---|---|---|
+| Likeness | Exact | Approximate |
+| Consistency | Identical every video | **Drifts between generations** |
+| Cost | £0 | ~$0.13 each |
+| Poses | Only what you shot | Anything |
+
+Drift is the one that bites. Two runs of the same prompt give subtly different
+faces, so a channel built on generated avatars slowly stops looking like one
+person — which is the exact failure this service was designed to avoid by
+compositing a real cutout in the first place. Every reference channel it
+imitates uses real photography.
 
 ## Recreate from a reference
 

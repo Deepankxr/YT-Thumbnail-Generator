@@ -362,6 +362,7 @@ def compose(
             dark=not light_plate,
             scale=SCALE * 0.9,
             layout=str(diagram.get("layout", "hub")),
+            mark=str(diagram.get("mark", "tile")),
             frame=diagram.get("frame"),
             frame_glow=parse_color(diagram.get("frame_glow")),
             screen=parse_color(diagram.get("screen")) or (255, 255, 255),

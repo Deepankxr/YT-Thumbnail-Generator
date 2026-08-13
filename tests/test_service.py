@@ -527,3 +527,43 @@ def test_matting_backends_report_which_ran():
     out, backend = cut_out(transparent)
     assert backend == "already-transparent"
     assert out.mode == "RGBA"
+
+
+# --------------------------------------------------------------------------- #
+# Pixel marks and avatar generation
+# --------------------------------------------------------------------------- #
+
+def test_pixel_sprite_has_hard_edges():
+    """NEAREST scaling is the point; a smooth ramp means it got resampled."""
+    from app.marks import robot
+    r = robot(320)
+    hist = r.getchannel("A").histogram()
+    levels = [i for i, count in enumerate(hist) if count]
+    assert levels == [0, 255], f"sprite alpha should be binary, got {levels[:8]}"
+
+
+def test_pixel_marks_change_the_diagram():
+    from app.diagram import node_diagram
+    nodes = [{"label": ""}] * 3
+    tiles = node_diagram(400, nodes, layout="cycle", mark="tile")
+    pixels = node_diagram(400, nodes, layout="cycle", mark="pixel")
+    assert tiles.tobytes() != pixels.tobytes()
+
+
+def test_avatar_poses_are_listed():
+    poses = {p["id"] for p in client.get("/avatar/poses").json()["poses"]}
+    assert {"point-left", "point-right", "neutral"} <= poses
+
+
+def test_avatar_requires_a_key_and_a_known_pose():
+    ref = {"reference": "assets/fonts/OFL.txt"}
+    assert client.post("/avatar", json=ref).status_code == 401
+    r = client.post("/avatar", json={"reference": "x", "pose": "moonwalk"},
+                    headers={"x-openrouter-key": "k"})
+    assert r.status_code == 422 and "moonwalk" in r.json()["detail"]
+
+
+def test_avatar_rejects_an_unreadable_reference():
+    r = client.post("/avatar", json={"reference": "/does/not/exist.png"},
+                    headers={"x-openrouter-key": "k"})
+    assert r.status_code == 422
