@@ -681,13 +681,18 @@ CARD_TYPES = [c["type"] for c in client.get("/cards").json()["cards"]]
 
 
 @pytest.mark.parametrize("kind", CARD_TYPES)
-def test_every_card_type_renders(kind):
+def test_every_card_type_renders_through_the_api(kind):
+    """Through HTTP, not compose(): the endpoint once forgot to pass `card` at
+    all, and a compositor-level test could never have seen it."""
     card = {"type": kind, "text": "$45,208", "sublabel": "last 30 days",
             "items": ["one", "two", "three"], "metrics": ["792", "1.4K"]}
-    img, manifest = compose(headline="x", style_name="herk", palette="desk",
-                            arrow=False, card=card)
-    assert img.size == (1280, 720)
-    assert any(m["id"] == "hero" for m in manifest), f"{kind} produced no prop"
+    r = client.post("/generate", json={"headline": "x", "style": "herk",
+                                       "palette": "desk", "arrow": False,
+                                       "card": card, "output": "base64",
+                                       "include_layout": True})
+    assert r.status_code == 200
+    ids = [m["id"] for m in r.json()["layout"]]
+    assert "hero" in ids, f"{kind} produced no prop through the API: {ids}"
 
 
 @pytest.mark.parametrize("kind", CARD_TYPES)
@@ -739,3 +744,43 @@ def test_studio_builds_the_card_picker_from_the_api():
     options = re.findall(r'<option[^>]*value="([^"]*)"', picker.group(1))
     assert options == [""], f"picker ships hardcoded options: {options}"
     assert "fetch('cards')" in PREVIEW_HTML
+
+
+# --------------------------------------------------------------------------- #
+# Studio responsiveness
+# --------------------------------------------------------------------------- #
+
+def test_renders_are_coalesced_to_one_in_flight():
+    """Firing a render per change let eight overlapping requests queue on a
+    single-worker server, so the newest frame arrived last — behind every stale
+    one. Measured 8 concurrent / 3.3s before, 1 concurrent / 2 requests after."""
+    assert "if(rendering){" in PREVIEW_HTML
+    assert "queued = (queued === false || fast === false) ? false : true;" in PREVIEW_HTML
+    assert "AbortController" in PREVIEW_HTML
+
+
+def test_images_are_preloaded_before_swapping():
+    """Assigning src directly leaves the old frame up until decode finishes."""
+    assert "function swapImage" in PREVIEW_HTML
+    assert "await swapImage($('full')" in PREVIEW_HTML
+
+
+def test_studio_shows_a_busy_state():
+    assert 'id="busy"' in PREVIEW_HTML and "function busy(" in PREVIEW_HTML
+
+
+def test_generate_forwards_every_render_affecting_field():
+    """`card` was accepted by the schema, wired into compose, and never passed
+    by /generate — so it silently did nothing. Compare the two directly."""
+    import inspect, re as _re
+    from app.compositor import compose as _compose
+
+    src = open("app/main.py").read()
+    gen = src[src.index('@app.post("/generate")'):]
+    call = gen[gen.index("img, layout = compose("):gen.index("    except ValueError")]
+    passed = set(_re.findall(r"^\s{12}(\w+)=", call, _re.M))
+
+    # draw_art / draw_vector are internal to the two-pass /edit flow.
+    expected = set(inspect.signature(_compose).parameters) - {"draw_art", "draw_vector"}
+    missing = expected - passed
+    assert not missing, f"/generate never forwards: {sorted(missing)}"

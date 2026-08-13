@@ -403,6 +403,7 @@ def generate(req: ThumbnailRequest, x_api_key: str | None = Header(default=None)
             hero=hero,
             background=req.background,
             arrow=req.arrow,
+            card=req.card.model_dump() if req.card else None,
             card_text=req.card_text,
             card_name=req.card_name,
             card_handle=req.card_handle,

@@ -49,6 +49,9 @@ PREVIEW_HTML = """
  #wrap{position:relative;width:100%;user-select:none}
  #wrap img{display:block;width:100%;border-radius:8px;background:#000;
            box-shadow:0 8px 34px rgba(0,0,0,.5)}
+ #busy{position:absolute;left:0;top:0;height:3px;width:0;background:var(--accent);
+       border-radius:3px;opacity:0;transition:width .18s ease,opacity .2s ease;z-index:6}
+ #busy.on{opacity:1}
  #proxy{position:absolute;inset:0;display:none;pointer-events:none;will-change:transform;
         border-radius:8px;background:none!important;box-shadow:none!important}
  #overlay{position:absolute;inset:0}
@@ -218,6 +221,7 @@ PREVIEW_HTML = """
  <div id="wrap">
    <img id="full" alt="thumbnail preview">
    <img id="proxy" alt="">
+   <div id="busy"></div>
    <div id="overlay"></div>
    <div id="tools"></div>
    <div id="editor" contenteditable="true" spellcheck="false"></div>
@@ -489,35 +493,75 @@ async function buildSpec(){
 }
 
 let seq=0, finalTimer=null;
+let rendering=false, queued=null, inflight=null;
+
+function busy(on){
+  const b=$('busy');
+  b.className = on ? 'on' : '';
+  b.style.width = on ? '55%' : '100%';
+  if(!on) setTimeout(()=>{ b.style.width='0'; }, 220);
+}
+
+/* Load into a detached Image first, then swap. Assigning src directly leaves
+   the canvas showing the old frame until decode finishes, which reads as a
+   stutter on every change. */
+function swapImage(el, src){
+  return new Promise(res=>{
+    const probe=new Image();
+    probe.onload=probe.onerror=()=>{ el.src=src; res(); };
+    probe.src=src;
+  });
+}
 
 async function render(fast){
-  const my=++seq;
-  $('err').textContent='';
-  const spec=await buildSpec();
-  if(fast){
-    // Two thirds of the pixels and a JPEG encode: ~60ms of work instead of
-    // ~180ms. Nobody can see the difference at preview size, and the full
-    // quality render lands a moment later anyway.
-    spec.width=854; spec.height=480; spec.format='jpeg'; spec.include_qa=false;
+  // At most one render in flight. Firing on every change instead let eight
+  // overlapping requests queue on a single-worker server, so the newest frame
+  // landed last — behind every stale one. That was the "laggy" feeling.
+  if(rendering){
+    queued = (queued === false || fast === false) ? false : true;
+    return;
   }
-  const r=await fetch('generate',{method:'POST',headers:{'Content-Type':'application/json'},
-                                  body:JSON.stringify(spec)});
-  if(my!==seq) return;    // superseded mid-flight; drop the stale frame
-  if(!r.ok){ let d; try{d=(await r.json()).detail}catch(e){d=r.statusText}
-             $('err').textContent='Error '+r.status+': '+(typeof d==='string'?d:JSON.stringify(d,null,1));
-             return; }
-  const j=await r.json();
-  if(my!==seq) return;
-  const src='data:'+(j.mimeType||'image/png')+';base64,'+j.data;
-  $('full').src=src; $('feed').src=src;
-  LAYOUT=j.layout||[]; drawOverlay();
-  if(!fast){
-    last=j;               // only a full-quality frame is worth downloading
-    pushHistory();        // settle points are the natural undo steps
-    const q=j.qa;
-    $('qa').innerHTML = q ? 'Feed legibility <span class="badge '+(q.verdict==='ok'?'ok':'weak')+'">'+
-        q.verdict.toUpperCase()+'</span> &nbsp; contrast '+q.headline_contrast+
-        ' &nbsp; edge energy '+q.edge_energy : '';
+  rendering = true;
+  const my = ++seq;
+  busy(true);
+  if(inflight) inflight.abort();
+  inflight = new AbortController();
+
+  try{
+    $('err').textContent='';
+    const spec=await buildSpec();
+    if(fast){
+      // Two thirds of the pixels and a JPEG encode: ~60ms of work instead of
+      // ~180ms. Nobody can see the difference at preview size, and the full
+      // quality render lands a moment later anyway.
+      spec.width=854; spec.height=480; spec.format='jpeg'; spec.include_qa=false;
+    }
+    const r=await fetch('generate',{method:'POST',headers:{'Content-Type':'application/json'},
+                                    body:JSON.stringify(spec), signal:inflight.signal});
+    if(my!==seq) return;
+    if(!r.ok){ let d; try{d=(await r.json()).detail}catch(e){d=r.statusText}
+               $('err').textContent='Error '+r.status+': '+(typeof d==='string'?d:JSON.stringify(d,null,1));
+               return; }
+    const j=await r.json();
+    if(my!==seq) return;
+    const src='data:'+(j.mimeType||'image/png')+';base64,'+j.data;
+    await swapImage($('full'), src);
+    $('feed').src=src;
+    LAYOUT=j.layout||[]; drawOverlay();
+    if(!fast){
+      last=j;               // only a full-quality frame is worth downloading
+      pushHistory();        // settle points are the natural undo steps
+      const q=j.qa;
+      $('qa').innerHTML = q ? 'Feed legibility <span class="badge '+(q.verdict==='ok'?'ok':'weak')+'">'+
+          q.verdict.toUpperCase()+'</span> &nbsp; contrast '+q.headline_contrast+
+          ' &nbsp; edge energy '+q.edge_energy : '';
+    }
+  }catch(e){
+    if(e.name!=='AbortError') $('err').textContent='Failed: '+e.message;
+  }finally{
+    rendering=false;
+    busy(false);
+    if(queued!==null){ const mode=queued; queued=null; render(mode); }
   }
 }
 
@@ -528,7 +572,7 @@ function schedule(){
   clearTimeout(finalTimer);
   finalTimer=setTimeout(()=>render(false), 320);
 }
-function debounce(){clearTimeout(timer);timer=setTimeout(schedule,90)}
+function debounce(){clearTimeout(timer);timer=setTimeout(schedule,45)}
 
 /* ---------------- overlay ---------------- */
 function drawOverlay(){
