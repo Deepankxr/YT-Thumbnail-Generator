@@ -72,6 +72,19 @@ PREVIEW_HTML = """
  #selinfo{background:#15171a;border:1px solid var(--line);border-radius:6px;padding:10px;
           margin-top:10px;font-size:12px;color:var(--muted);display:none}
  #selinfo b{color:var(--fg)}
+ #words{display:flex;flex-wrap:wrap;gap:5px}
+ .word{width:auto;margin:0;background:#0d0e10;border:1px solid var(--line);border-radius:5px;
+       padding:4px 9px;font-size:12px;font-weight:400;cursor:pointer;color:var(--fg)}
+ .word:hover{border-color:#3d4247}
+ .word.on{border-color:var(--accent);background:#16202f}
+ .word .sw{display:inline-block;width:8px;height:8px;border-radius:50%;margin-left:6px;
+           vertical-align:middle;border:1px solid rgba(255,255,255,.25)}
+ #swatches{margin-top:10px}
+ .grp{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:8px 0 4px}
+ .sws{display:flex;gap:5px;flex-wrap:wrap}
+ .sw-btn{width:26px;height:26px;border-radius:5px;border:1px solid rgba(255,255,255,.18);
+         cursor:pointer;padding:0;margin:0;flex:0 0 auto}
+ .sw-btn:hover{outline:2px solid var(--accent);outline-offset:1px}
  .hint{font-size:11px;color:var(--muted);margin-top:10px;line-height:1.6}
  kbd{background:#26292e;border-radius:3px;padding:1px 5px;font-size:10px;font-family:inherit}
 </style></head><body>
@@ -90,8 +103,13 @@ PREVIEW_HTML = """
  <label>Accent words <span style="text-transform:none">(comma separated)</span></label>
  <input type="text" id="accent" placeholder="everything.">
 
- <label>Word colours <span style="text-transform:none">(word:#hex)</span></label>
- <input type="text" id="wordcolors" placeholder="stop:#FFD400">
+ <label>Word colours</label>
+ <div id="words"></div>
+ <div id="swatches"></div>
+ <div class="row" style="margin-top:8px">
+   <input type="text" id="customhex" placeholder="#RRGGBB" maxlength="7">
+   <button class="tiny ghost" id="clearcolor" style="flex:0 0 auto">Clear word</button>
+ </div>
 
  <div class="row">
   <div><label>Text position</label><select id="textpos">
@@ -158,7 +176,7 @@ async function boot(){
   STYLES.forEach(st=>{const o=document.createElement('option');o.value=st.name;
     o.textContent=st.name+' \\u2014 '+st.accent;s.appendChild(o)});
   s.onchange=()=>{fillPalettes();render()};
-  fillPalettes(); render();
+  fillPalettes(); drawWords(); drawSwatches(); render();
 }
 function fillPalettes(){
   const st=STYLES.find(x=>x.name===$('style').value), p=$('palette');
@@ -169,11 +187,54 @@ function fileAsDataURL(el){
   return new Promise(res=>{ if(!el.files||!el.files[0])return res(null);
     const r=new FileReader(); r.onload=()=>res(r.result); r.readAsDataURL(el.files[0]); });
 }
-function parsePairs(raw){
-  const out={};
-  raw.split(',').map(s=>s.trim()).filter(Boolean).forEach(p=>{
-    const i=p.lastIndexOf(':'); if(i<1)return; out[p.slice(0,i).trim()]=p.slice(i+1).trim(); });
-  return out;
+/* ---------------- word colours ---------------- */
+let WORDCOLORS={}, PALETTE=null, activeWord=null;
+
+const wordKey=w=>w.toLowerCase().replace(/^[^\\w$]+|[^\\w$]+$/g,'');
+
+function drawWords(){
+  const box=$('words'); box.innerHTML='';
+  const seen=new Set();
+  ($('headline').value||'').split(/\\s+/).filter(Boolean).forEach(raw=>{
+    const k=wordKey(raw);
+    if(!k||seen.has(k))return; seen.add(k);
+    const b=document.createElement('button');
+    b.type='button';
+    b.className='word'+(activeWord===k?' on':'');
+    b.textContent=raw;
+    if(WORDCOLORS[k]){
+      const dot=document.createElement('span');
+      dot.className='sw'; dot.style.background=WORDCOLORS[k];
+      b.appendChild(dot);
+    }
+    b.onclick=()=>{ activeWord = activeWord===k ? null : k; drawWords(); };
+    box.appendChild(b);
+  });
+  // Drop colours for words no longer in the headline, or they linger invisibly.
+  Object.keys(WORDCOLORS).forEach(k=>{ if(!seen.has(k)) delete WORDCOLORS[k]; });
+}
+
+async function drawSwatches(){
+  if(!PALETTE) PALETTE=await (await fetch('palette')).json();
+  const box=$('swatches'); box.innerHTML='';
+  PALETTE.groups.forEach(g=>{
+    const h=document.createElement('div'); h.className='grp'; h.textContent=g.name;
+    const row=document.createElement('div'); row.className='sws';
+    g.swatches.forEach(s=>{
+      const b=document.createElement('button');
+      b.className='sw-btn'; b.type='button'; b.style.background=s.hex;
+      b.title=s.name+' '+s.hex;
+      b.onclick=()=>applyColor(s.hex);
+      row.appendChild(b);
+    });
+    box.appendChild(h); box.appendChild(row);
+  });
+}
+function applyColor(hex){
+  if(!activeWord){ $('err').textContent='Pick a word above first, then choose a colour.'; return; }
+  $('err').textContent='';
+  WORDCOLORS[activeWord]=hex;
+  drawWords(); render();
 }
 function ovFor(id){ return OVERRIDES[id] || (OVERRIDES[id]={dx:0,dy:0,scale:1}); }
 
@@ -182,7 +243,7 @@ async function render(){
   const body={
     headline:$('headline').value||' ', style:$('style').value, palette:$('palette').value,
     accent_words:$('accent').value.split(',').map(s=>s.trim()).filter(Boolean),
-    word_colors:parsePairs($('wordcolors').value),
+    word_colors:WORDCOLORS,
     arrow:$('arrow').checked, overrides:OVERRIDES,
     output:'base64', include_qa:true, include_layout:true
   };
@@ -209,6 +270,7 @@ async function render(){
       ' &nbsp; edge energy '+q.edge_energy : '';
 }
 function debounce(){clearTimeout(timer);timer=setTimeout(render,220)}
+$('headline').addEventListener('input',drawWords);
 
 /* ---------------- overlay ---------------- */
 function drawOverlay(){
@@ -349,6 +411,7 @@ function closeEditor(commit){
   editing=false; editor.style.display='none';
   if(commit && editor.textContent.trim()){
     $('headline').value=editor.textContent.replace(/\\n+/g,' ').trim();
+    drawWords();
     render();
   }
 }
@@ -385,6 +448,12 @@ wrap.addEventListener('pointerdown',e=>{ if(e.target===$('full')){ selected=null
 document.querySelectorAll('#panel input,#panel select,#panel textarea').forEach(el=>{
   el.addEventListener(el.type==='file'||el.tagName==='SELECT'?'change':'input',debounce)});
 $('reset').onclick=()=>{ OVERRIDES={}; selected=null; render(); };
+$('clearcolor').onclick=()=>{ if(activeWord){ delete WORDCOLORS[activeWord]; drawWords(); render(); } };
+$('customhex').addEventListener('change',e=>{
+  const v=e.target.value.trim();
+  if(/^#?[0-9a-fA-F]{6}$/.test(v)) applyColor(v.startsWith('#')?v:'#'+v);
+  else if(v) $('err').textContent='Custom colour must be a 6-digit hex, e.g. #FFD400';
+});
 $('dl').onclick=()=>{ if(!last)return;
   const a=document.createElement('a'); a.href='data:image/png;base64,'+last.data;
   a.download=last.filename; a.click(); };

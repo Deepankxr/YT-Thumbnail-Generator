@@ -272,6 +272,37 @@ OTTLEY = Style(
 STYLES: dict[str, Style] = {s.name: s for s in (SARAEV, HERK, ROBERTS, OTTLEY)}
 
 
+# Curated word-colour palette. Every swatch was picked to survive the two things
+# that kill thumbnail text: sitting on a busy photo, and being scaled to 168px
+# in the feed. Mid-tone muddy colours are deliberately absent — they vanish.
+WORD_PALETTE: dict[str, list[tuple[str, str]]] = {
+    "Highlight": [
+        ("Signal yellow", "#FFD400"),
+        ("Amber", "#FFB020"),
+        ("Orange", "#FF5C2B"),
+        ("Alert red", "#E83E28"),
+    ],
+    "Cool": [
+        ("Cyan", "#22D3EE"),
+        ("Sky", "#38BDF8"),
+        ("Electric blue", "#2563EB"),
+        ("Violet", "#8B5CF6"),
+    ],
+    "Signal": [
+        ("Green", "#22C55E"),
+        ("Lime", "#A3E635"),
+        ("Pink", "#EC4899"),
+        ("Magenta", "#D946EF"),
+    ],
+    "Neutral": [
+        ("White", "#FFFFFF"),
+        ("Bone", "#F2EDE4"),
+        ("Slate", "#94A3B8"),
+        ("Ink", "#111114"),
+    ],
+}
+
+
 def get_style(name: str, palette: str | None = None) -> Style:
     """Fetch a preset, optionally swapping its background palette."""
     from dataclasses import replace

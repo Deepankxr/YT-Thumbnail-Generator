@@ -28,7 +28,7 @@ from .compositor import compose, legibility_report
 from .preview import PREVIEW_HTML
 from .hero import HeroUnavailable, generate_hero
 from .schema import ThumbnailRequest
-from .styles import STYLES
+from .styles import STYLES, WORD_PALETTE
 
 MIME = "image/png"
 API_KEY = os.environ.get("THUMB_API_KEY", "").strip()
@@ -99,6 +99,20 @@ def styles():
             }
             for s in STYLES.values()
         ]
+    }
+
+
+@app.get("/palette")
+def palette():
+    """Curated word-colour swatches, grouped. Shared by the studio and any
+    caller picking colours programmatically, so both stay on the same set."""
+    return {
+        "groups": [
+            {"name": group, "swatches": [{"name": n, "hex": h} for n, h in swatches]}
+            for group, swatches in WORD_PALETTE.items()
+        ],
+        "accents": {s.name: "#%02x%02x%02x" % s.accent_fill
+                    for s in STYLES.values() if s.accent_fill},
     }
 
 
