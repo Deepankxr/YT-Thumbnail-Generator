@@ -7,17 +7,14 @@ Removes the background, trims to the subject, normalises the size, and reports
 whether the result is actually good enough to use. Run it once per photo; the
 cutouts are then reused forever at zero cost.
 
-Background removal needs `rembg`:
+Background removal is tried in order:
 
-    pip install rembg onnxruntime
+  1. macOS Vision — the same subject-lifting model Preview uses. Instant, free,
+     no download. Needs `pip install pyobjc-framework-Vision pyobjc-framework-Quartz`.
+  2. rembg — anywhere, if installed. Downloads a ~175MB model on first run.
+  3. Neither: the script tells you to cut it out by hand and re-run on the PNG.
 
-The first run downloads the matting model. The default (u2net, ~175MB) is fast
-and fine for a well-lit photo against a plain wall; pass
-`--model birefnet-general` for noticeably better hair edges at a ~900MB download.
-
-If it isn't installed, the script still trims and QCs an image that already has
-transparency — so a cutout made in Photoshop, Photoroom, or macOS Preview
-("Remove Background" in the markup toolbar) can be dropped straight in.
+Images that already carry transparency skip straight to trim and QC.
 """
 
 from __future__ import annotations
@@ -33,7 +30,7 @@ TARGET_HEIGHT = 1400  # generous for a 1280x720 canvas rendered at 2x
 MIN_SOURCE_PX = 900   # below this the cutout goes soft once scaled up
 
 
-def cutout(img: Image.Image, model: str = "u2net") -> tuple[Image.Image, bool]:
+def cutout(img: Image.Image, model: str = "u2net") -> tuple[Image.Image, bool]:  # noqa: D401
     """Return (rgba, removed_here). Passes through images that already have alpha.
 
     `u2net` is the default deliberately: ~175MB and fast, and for a well-lit
@@ -42,28 +39,12 @@ def cutout(img: Image.Image, model: str = "u2net") -> tuple[Image.Image, bool]:
     better but is a ~900MB download, so it's opt-in via --model rather than
     something every first run has to wait for.
     """
-    if img.mode == "RGBA" and img.getchannel("A").getextrema()[0] < 250:
-        return img, False  # already transparent somewhere; trust it
-
+    from app.matting import MattingUnavailable, cut_out
     try:
-        from rembg import new_session, remove
-    except ImportError:
-        raise SystemExit(
-            "This image has no transparency and rembg isn't installed.\n"
-            "  pip install rembg onnxruntime\n"
-            "…or cut it out first (macOS Preview > Markup > Remove Background,\n"
-            "Photoroom, or Photoshop) and re-run this script on the PNG."
-        )
-
-    try:
-        return remove(img, session=new_session(model)), True
-    except Exception as exc:
-        raise SystemExit(
-            f"background removal failed with model '{model}': {exc}\n"
-            "First run downloads the model, so this can also be a slow or "
-            "interrupted download — retry, or pass --model u2net for the "
-            "smallest one."
-        )
+        out, backend = cut_out(img, model=model)
+    except MattingUnavailable as exc:
+        raise SystemExit(str(exc))
+    return out, backend != "already-transparent"
 
 
 def trim(img: Image.Image, pad: int = 8) -> Image.Image:

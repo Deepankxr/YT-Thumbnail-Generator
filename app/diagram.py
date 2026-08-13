@@ -12,10 +12,10 @@ import json
 import math
 from collections import OrderedDict
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 from .assets import load_font, load_image
-from .shapes import drop_shadow, rounded_rect
+from .shapes import drop_shadow, hand_arrow, rounded_rect
 
 RGB = tuple[int, int, int]
 
@@ -90,8 +90,19 @@ def node_diagram(
     line_color: RGB | None = None,
     dark: bool = True,
     scale: float = 1.0,
+    layout: str = "hub",
+    frame: str | None = None,
+    frame_glow: RGB | None = None,
+    screen: RGB = (255, 255, 255),
 ) -> Image.Image:
-    """Hub-and-spoke diagram, `width` px wide, height derived from the layout.
+    """Node diagram, `width` px wide, height derived from the layout.
+
+    `layout="hub"` is spokes radiating from a centre; `layout="cycle"` drops the
+    hub and curves an arrow from each node to the next, which is how a loop or
+    a repeating process reads.
+
+    `frame="tablet"` mounts the whole thing on a lit screen inside a device
+    bezel — the shape a lot of product thumbnails use to say "this is software".
 
     Nodes are distributed around an ellipse rather than a circle: thumbnails are
     16:9, and a true circle wastes the horizontal space that matters.
@@ -100,13 +111,16 @@ def node_diagram(
         raise ValueError("node_diagram needs at least one node")
 
     key = json.dumps([width, nodes, center_icon, center_label, accent, text_color,
-                      line_color, dark, round(scale, 4)], sort_keys=True, default=str)
+                      line_color, dark, round(scale, 4), layout, frame, frame_glow,
+                      screen], sort_keys=True, default=str)
     hit = _CACHE.get(key)
     if hit is not None:
         _CACHE.move_to_end(key)
         return hit.copy()
 
-    height = int(width * 0.72)
+    # A cycle has no hub and reads better squarer; a hub layout needs the
+    # width for its labels.
+    height = int(width * (0.84 if layout == "cycle" else 0.72))
     canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(canvas)
 
@@ -126,8 +140,26 @@ def node_diagram(
         angle = -math.pi / 2 + (2 * math.pi * i / n)
         positions.append((cx + rx * math.cos(angle), cy + ry * math.sin(angle)))
 
+    if layout == "cycle":
+        # Arrow from each node to the next, stopping clear of both tiles so the
+        # heads read as pointing at something rather than into it.
+        for i, (px, py) in enumerate(positions):
+            qx, qy = positions[(i + 1) % n]
+            vx, vy = qx - px, qy - py
+            dist = math.hypot(vx, vy) or 1
+            ux, uy = vx / dist, vy / dist
+            gap = tile * 0.78
+            canvas.alpha_composite(hand_arrow(
+                (width, height),
+                (px + ux * gap, py + uy * gap),
+                (qx - ux * gap, qy - uy * gap),
+                line, width=max(2, int(width * 0.008)), bow=0.30,
+                head_len=width * 0.035, opacity=235,
+            ))
+        draw = ImageDraw.Draw(canvas)
+
     # Connectors first, so tiles sit on top of the line ends.
-    for px, py in positions:
+    for px, py in positions if layout != "cycle" else []:
         vx, vy = px - cx, py - cy
         dist = math.hypot(vx, vy) or 1
         ux, uy = vx / dist, vy / dist
@@ -140,7 +172,9 @@ def node_diagram(
         )
 
     # Hub
-    if center_icon:
+    if layout == "cycle":
+        pass
+    elif center_icon:
         icon = load_image(center_icon)
         if icon is not None:
             ratio = hub / max(icon.width, icon.height)
@@ -163,7 +197,7 @@ def node_diagram(
             d2.line([(cx, cy), (cx + math.cos(a) * hub * 0.32, cy + math.sin(a) * hub * 0.32)],
                     fill=(255, 255, 255, 240), width=max(3, int(hub * 0.07)))
 
-    if center_label:
+    if center_label and layout != "cycle":
         cw = draw.textlength(center_label, font=font)
         draw.text((cx - cw / 2, cy + hub * 0.62), center_label, font=font,
                   fill=text_color + (255,))
@@ -191,7 +225,36 @@ def node_diagram(
         ly = max(2, min(ly, height - label_px - 2))
         draw.text((lx, ly), label, font=font, fill=text_color + (255,))
 
+    if frame:
+        canvas = _mount_in_device(canvas, screen, frame_glow, scale)
+
     _CACHE[key] = canvas
     if len(_CACHE) > _CACHE_MAX:
         _CACHE.popitem(last=False)
     return canvas.copy()
+
+
+def _mount_in_device(content: Image.Image, screen: RGB, glow: RGB | None,
+                     scale: float) -> Image.Image:
+    """Put the diagram on a lit screen inside a rounded bezel."""
+    cw, ch = content.size
+    bezel = max(8, int(cw * 0.035))
+    pad = int(cw * 0.10)
+    sw, sh = cw + bezel * 2, ch + bezel * 2
+    out = Image.new("RGBA", (sw + pad * 2, sh + pad * 2), (0, 0, 0, 0))
+
+    if glow:
+        # Two passes: a tight bright core plus a wide soft bloom. One blurred
+        # rectangle reads as a drop shadow rather than an emitting screen.
+        for spread, alpha in ((0.22, 235), (0.55, 150)):
+            halo = rounded_rect((sw, sh), int(bezel * 1.6), glow + (alpha,))
+            sheet = Image.new("RGBA", out.size, (0, 0, 0, 0))
+            sheet.paste(halo, (pad, pad))
+            out.alpha_composite(sheet.filter(ImageFilter.GaussianBlur(radius=pad * spread)))
+
+    body = rounded_rect((sw, sh), int(bezel * 1.6), (24, 27, 33, 255))
+    out.alpha_composite(body, (pad, pad))
+    out.alpha_composite(rounded_rect((cw, ch), int(bezel * 0.7), screen + (255,)),
+                        (pad + bezel, pad + bezel))
+    out.alpha_composite(content, (pad + bezel, pad + bezel))
+    return out

@@ -348,7 +348,11 @@ def compose(
     elif diagram and diagram.get("nodes"):
         light_plate = _luma(style.bg_top) > 0.6
         hero_layer = node_diagram(
-            int(w * 0.52),
+            # Size to the box it will occupy. A frame adds bezel and glow
+            # padding on both sides — about 27% — so the inner diagram has to
+            # be that much narrower or _fit shrinks the whole thing to fit.
+            max(200, int(style.diagram_box[2] * w
+                         / (1.27 if diagram.get("frame") else 1.0))),
             diagram["nodes"],
             center_icon=diagram.get("center_icon"),
             center_label=diagram.get("center_label"),
@@ -357,6 +361,11 @@ def compose(
             text_color=style.text_color,
             dark=not light_plate,
             scale=SCALE * 0.9,
+            layout=str(diagram.get("layout", "hub")),
+            frame=diagram.get("frame"),
+            frame_glow=parse_color(diagram.get("frame_glow")),
+            screen=parse_color(diagram.get("screen")) or (255, 255, 255),
+            line_color=parse_color(diagram.get("line_color")),
         )
 
     if hero_layer is not None:

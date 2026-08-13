@@ -108,7 +108,7 @@ The presets are a starting point, not a cage. Every knob below is per-request.
 | `subjects` | Several cutouts for a group shot, overlapped left to right. A `null` slot renders the placeholder so layouts can be previewed before assets exist |
 | `icons` | Floating 3D logos dropped into the style's icon slots |
 | `labels` | Free-standing callouts ("opus" / "fable"), each with an optional arrow. Draggable on the canvas |
-| `diagram` | Hub-and-spoke node diagram — central icon, dashed connectors, labelled nodes |
+| `diagram` | Node diagram: `layout` `hub` (spokes) or `cycle` (a loop of arrows), optional `frame: tablet` with a glow |
 | `card_name` / `card_handle` | Identity on the social card prop — use your own, not the reference channel's |
 | `subject_side` | Flip the cutout left or right |
 | `hidden` | Drop elements by id (`headline`, `subject`, `hero`, `arrow`, `icons`, `label0`…). Deletion in the studio; restorable |
@@ -164,9 +164,16 @@ What actually determines whether the result looks good:
 Then run:
 
 ```bash
-pip install rembg onnxruntime
+# macOS — instant, free, no model download
+pip install pyobjc-framework-Vision pyobjc-framework-Quartz
 python3 prepare_subject.py shoot/*.jpg -o assets/subjects/
 ```
+
+Backgrounds are removed by macOS Vision where available — the same subject
+lifting Preview uses. It needs no download, which matters: rembg's ~175MB model
+fetch is slow and fails often enough that it is a poor sole dependency. rembg
+remains the fallback on other platforms, and images that already carry
+transparency skip straight to trim and QC.
 
 It removes the background, trims to the subject, normalises the height, and QCs
 the result — flagging hard/jagged edges, background halos, low resolution, and

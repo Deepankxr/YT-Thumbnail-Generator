@@ -474,3 +474,56 @@ def test_analyzer_cleans_a_tile_spec():
     assert spec["tile"]["opacity"] == 1.0
     from app.schema import ThumbnailRequest
     ThumbnailRequest(**spec)
+
+
+# --------------------------------------------------------------------------- #
+# Cycle layout and device frame
+# --------------------------------------------------------------------------- #
+
+def test_cycle_layout_drops_the_hub():
+    from app.diagram import node_diagram
+    nodes = [{"label": ""}] * 3
+    hub = node_diagram(400, nodes, layout="hub")
+    cycle = node_diagram(400, nodes, layout="cycle")
+    assert hub.tobytes() != cycle.tobytes()
+    assert cycle.height > hub.height, "a cycle is rendered squarer than a hub"
+
+
+def test_framed_diagram_is_larger_than_its_content():
+    from app.diagram import node_diagram
+    nodes = [{"label": ""}] * 3
+    bare = node_diagram(400, nodes, layout="cycle")
+    framed = node_diagram(400, nodes, layout="cycle", frame="tablet",
+                          frame_glow=(34, 211, 238))
+    assert framed.width > bare.width and framed.height > bare.height
+
+
+def test_framed_diagram_is_sized_to_its_box_before_fitting():
+    """Frame padding once ate ~27% of the box, silently shrinking the device.
+
+    Checking the *fitted* result proves nothing: `contain` always fills the
+    limiting dimension, so any fill ratio measured after fitting is ~1.0 no
+    matter how badly the layer was sized. The real invariant is upstream — the
+    layer must be built at roughly the box's own width so fitting has nothing
+    left to shrink.
+    """
+    from app.compositor import SCALE
+    from app.diagram import node_diagram
+
+    style = get_style("herk")
+    box_px = style.diagram_box[2] * 1280 * SCALE
+    rendered = node_diagram(
+        max(200, int(box_px / 1.27)), [{"label": ""}] * 3,
+        layout="cycle", frame="tablet", frame_glow=(34, 211, 238))
+    overshoot = rendered.width / box_px
+    assert 0.95 < overshoot < 1.05, (
+        f"framed layer is {overshoot:.2f}x its box, so fitting rescales it")
+
+
+def test_matting_backends_report_which_ran():
+    """Vision and rembg are both optional; the caller must know what was used."""
+    from app.matting import cut_out
+    transparent = Image.new("RGBA", (40, 40), (255, 0, 0, 0))
+    out, backend = cut_out(transparent)
+    assert backend == "already-transparent"
+    assert out.mode == "RGBA"

@@ -152,6 +152,7 @@ HERK = Style(
     text_box=(0.045, 0.08, 0.56, 0.28),
     subject_box=(0.55, 0.05, 0.45, 0.95),
     hero_box=(0.03, 0.34, 0.50, 0.56),
+    diagram_box=(0.015, 0.17, 0.58, 0.80),
     subject_shadow=True,
     subject_shadow_opacity=0.55,
     arrow_color=(255, 255, 255),

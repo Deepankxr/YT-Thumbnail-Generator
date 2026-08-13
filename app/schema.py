@@ -61,6 +61,13 @@ class Diagram(BaseModel):
     center_icon: str | None = None
     center_label: str | None = Field(None, max_length=40)
     accent: str | None = Field(None, description="Node colour; defaults to the style accent.")
+    layout: Literal["hub", "cycle"] = Field(
+        "hub", description="hub = spokes from a centre; cycle = a loop of arrows.")
+    frame: Literal["tablet"] | None = Field(
+        None, description="Mount the diagram on a screen inside a device bezel.")
+    frame_glow: str | None = Field(None, description="Halo colour around the device.")
+    screen: str | None = Field(None, description="Screen fill; defaults to white.")
+    line_color: str | None = Field(None, description="Connector/arrow colour.")
 
 
 class Tile(BaseModel):
