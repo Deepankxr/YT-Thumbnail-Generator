@@ -65,6 +65,9 @@ class Style:
     subject_box: tuple[float, float, float, float] = (0.52, 0.06, 0.46, 0.94)
     subject_anchor: str = "bottom-right"
     hero_box: tuple[float, float, float, float] = (0.05, 0.42, 0.44, 0.50)
+    # Diagrams need far more room than an icon or card, and their labels need
+    # space around them, so they get their own box rather than reusing hero_box.
+    diagram_box: tuple[float, float, float, float] = (0.01, 0.26, 0.53, 0.66)
 
     # Icon slots: normalised (x, y, size) for floating 3D logos.
     icon_slots: list[tuple[float, float, float]] = field(default_factory=list)

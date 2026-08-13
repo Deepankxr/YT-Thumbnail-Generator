@@ -12,11 +12,13 @@ import math
 from PIL import Image, ImageDraw, ImageFilter
 
 from . import cards
+from .diagram import node_diagram
 from .assets import load_image
 from .shapes import (
     drop_shadow, hand_arrow, linear_gradient, radial_glow, rim_light, scrim, vignette,
 )
 from .styles import Style, get_style
+from .assets import load_font
 from .text import layout_headline, paint_headline, underline
 
 SCALE = 2
@@ -58,6 +60,11 @@ def _fit(img: Image.Image, box: tuple[int, int, int, int], anchor: str) -> tuple
 
 def _denorm(rect: tuple[float, float, float, float], w: int, h: int) -> tuple[int, int, int, int]:
     return (int(rect[0] * w), int(rect[1] * h), int(rect[2] * w), int(rect[3] * h))
+
+
+def _luma(rgb: tuple[int, int, int]) -> float:
+    r, g, b = (c / 255 for c in rgb)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
 
 
 def parse_color(value: str | tuple | None) -> tuple[int, int, int] | None:
@@ -192,6 +199,8 @@ def compose(
     subjects: list[str] | None = None,
     icons: list[str] | None = None,
     word_colors: dict[str, str] | None = None,
+    labels: list[dict] | None = None,
+    diagram: dict | None = None,
     hero: str | None = None,
     background: str | None = None,
     arrow: bool = True,
@@ -296,9 +305,23 @@ def compose(
         hero_layer = cards.with_shadow(
             cards.toast(int(w * 0.36), toast_text, toast_amount, scale=SCALE * 0.9)
         )
+    elif diagram and diagram.get("nodes"):
+        light_plate = _luma(style.bg_top) > 0.6
+        hero_layer = node_diagram(
+            int(w * 0.52),
+            diagram["nodes"],
+            center_icon=diagram.get("center_icon"),
+            center_label=diagram.get("center_label"),
+            accent=parse_color(diagram.get("accent")) or (style.accent_fill or (217, 119, 87)),
+            text_color=style.text_color,
+            dark=not light_plate,
+            scale=SCALE * 0.9,
+        )
 
     if hero_layer is not None:
-        box = _denorm(_shift(style.hero_box, "hero"), w, h)
+        base_box = style.diagram_box if (diagram and diagram.get("nodes") and not hero
+                                         and not card_text and not toast_text) else style.hero_box
+        box = _denorm(_shift(base_box, "hero"), w, h)
         fitted, origin = _fit(hero_layer, box, "center")
         if not card_text and not toast_text:
             canvas.alpha_composite(drop_shadow(
@@ -311,6 +334,9 @@ def compose(
     refs: list[str | None] = list(subjects) if subjects else [subject]
     box_rect = style.subject_box
     anchor = style.subject_anchor
+    if subject_side is None and diagram and diagram.get("nodes"):
+        # A diagram occupies the left half; centring the subject would bury it.
+        subject_side = "right"
     if subject_side == "left":
         box_rect = (0.02, box_rect[1], box_rect[2], box_rect[3])
         anchor = anchor.replace("right", "left")
@@ -357,6 +383,46 @@ def compose(
                          "from": [n_from[0], n_from[1]], "to": [n_to[0], n_to[1]],
                          "x": min(n_from[0], n_to[0]), "y": min(n_from[1], n_to[1]),
                          "w": abs(n_to[0] - n_from[0]), "h": abs(n_to[1] - n_from[1])})
+
+    # --- free-standing labels ---------------------------------------------
+    # Nate's "opus" / "fable" callouts: small text anywhere, each able to point
+    # at something with its own arrow.
+    for i, lab in enumerate(labels or []):
+        text = str(lab.get("text", "")).strip()
+        if not text or not draw_vector:
+            continue
+        lx = float(lab.get("x", 0.1)) + float((ov.get(f"label{i}") or {}).get("dx", 0.0))
+        ly = float(lab.get("y", 0.1)) + float((ov.get(f"label{i}") or {}).get("dy", 0.0))
+        lscale = float((ov.get(f"label{i}") or {}).get("scale", 1.0))
+        size = max(10, int(float(lab.get("size", 0.055)) * h * lscale))
+        colour = parse_color(lab.get("color")) or style.text_color
+        lfont = load_font(style.font_family, size, style.font_weight, style.font_width)
+
+        ldraw = ImageDraw.Draw(canvas)
+        tw = ldraw.textlength(text, font=lfont)
+        ox, oy = lx * w, ly * h
+
+        if lab.get("shadow", True):
+            shade = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+            ImageDraw.Draw(shade).text((ox, oy), text, font=lfont, fill=(0, 0, 0, 150))
+            canvas.alpha_composite(shade.filter(ImageFilter.GaussianBlur(radius=int(8 * SCALE))))
+        ldraw.text((ox, oy), text, font=lfont, fill=colour + (255,))
+
+        target = lab.get("arrow_to")
+        if target:
+            canvas.alpha_composite(hand_arrow(
+                (w, h), (ox + tw / 2, oy + size * 1.25),
+                (float(target[0]) * w, float(target[1]) * h),
+                parse_color(lab.get("arrow_color")) or colour,
+                width=max(3, int(5 * SCALE)), bow=float(lab.get("bow", 0.22)),
+                head_len=30.0 * SCALE,
+            ))
+
+        manifest.append({
+            "id": f"label{i}", "type": "label", "label": text[:18],
+            "x": ox / w, "y": oy / h, "w": tw / w, "h": size * 1.25 / h,
+            "font_px": size / SCALE,
+        })
 
     # --- headline ---------------------------------------------------------
     if not draw_vector:

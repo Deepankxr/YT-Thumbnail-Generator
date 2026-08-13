@@ -25,6 +25,34 @@ class EditRequest(BaseModel):
     include_qa: bool = False
 
 
+class Label(BaseModel):
+    """A free-standing caption, optionally pointing at something."""
+
+    text: str = Field(..., min_length=1, max_length=60)
+    x: float = Field(0.08, ge=-0.2, le=1.2, description="Left edge, fraction of width.")
+    y: float = Field(0.08, ge=-0.2, le=1.2, description="Top edge, fraction of height.")
+    size: float = Field(0.055, gt=0.005, le=0.4, description="Cap height as a fraction of height.")
+    color: str | None = None
+    arrow_to: tuple[float, float] | None = Field(None, description="Point an arrow at this spot.")
+    arrow_color: str | None = None
+    bow: float = Field(0.22, ge=-1.0, le=1.0, description="Arrow curvature; sign flips the bend.")
+    shadow: bool = True
+
+
+class DiagramNode(BaseModel):
+    label: str = Field("", max_length=40)
+    icon: str | None = Field(None, description="Optional icon for this node.")
+
+
+class Diagram(BaseModel):
+    """Hub-and-spoke node diagram, drawn deterministically."""
+
+    nodes: list[DiagramNode] = Field(default_factory=list, max_length=10)
+    center_icon: str | None = None
+    center_label: str | None = Field(None, max_length=40)
+    accent: str | None = Field(None, description="Node colour; defaults to the style accent.")
+
+
 class ElementOverride(BaseModel):
     """A nudge applied on top of the preset's placement for one element."""
 
@@ -68,6 +96,10 @@ class ThumbnailRequest(BaseModel):
     background: str | None = Field(None, description="Full-bleed background plate.")
 
     # Rendered props, used when no hero image is supplied.
+    labels: list[Label] = Field(default_factory=list, max_length=8,
+                                description="Free-standing captions with optional arrows.")
+    diagram: Diagram | None = Field(None, description="Hub-and-spoke node diagram.")
+
     card_text: str | None = Field(None, description="Renders a social card prop.")
     card_name: str = "Your Name"
     card_handle: str = "@yourhandle"

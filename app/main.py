@@ -158,6 +158,7 @@ def edit(
     common = dict(
         headline=spec.headline, style_name=spec.style, palette=spec.palette,
         accent_words=spec.accent_words, word_colors=spec.word_colors,
+        labels=[l.model_dump() for l in spec.labels],
         arrow=spec.arrow, subject_side=spec.subject_side,
         text_position=spec.text_position,
         overrides={k: v.model_dump(by_alias=True, exclude_none=True)
@@ -169,6 +170,7 @@ def edit(
         plate, _ = compose(
             subject=spec.subject, subjects=spec.subjects, icons=spec.icons,
             hero=spec.hero, background=spec.background,
+            diagram=spec.diagram.model_dump() if spec.diagram else None,
             card_text=spec.card_text, card_name=spec.card_name,
             card_handle=spec.card_handle, toast_text=spec.toast_text,
             toast_amount=spec.toast_amount,
@@ -235,6 +237,8 @@ def generate(req: ThumbnailRequest, x_api_key: str | None = Header(default=None)
             subjects=req.subjects,
             icons=req.icons,
             word_colors=req.word_colors,
+            labels=[l.model_dump() for l in req.labels],
+            diagram=req.diagram.model_dump() if req.diagram else None,
             hero=hero,
             background=req.background,
             arrow=req.arrow,

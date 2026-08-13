@@ -39,9 +39,9 @@ Run the API:
 uvicorn app.main:app --reload --port 8080
 ```
 
-Then open **http://localhost:8080/preview** for the studio UI — every field as a
-control, re-rendering as you type, with a full-size and a feed-size preview side
-by side.
+Then open **http://localhost:8080/preview** for the studio: controls on the left,
+canvas in the middle, AI chat on the right. Click anything on the canvas to move,
+resize or retype it; the full-size and feed-size previews update as you go.
 
 ## Endpoints
 
@@ -100,6 +100,9 @@ The presets are a starting point, not a cage. Every knob below is per-request.
 | `text_position` | Move the headline band to `top` or `bottom`. The scrim and the QA probe follow it |
 | `subjects` | Several cutouts for a group shot, overlapped left to right. A `null` slot renders the placeholder so layouts can be previewed before assets exist |
 | `icons` | Floating 3D logos dropped into the style's icon slots |
+| `labels` | Free-standing callouts ("opus" / "fable"), each with an optional arrow. Draggable on the canvas |
+| `diagram` | Hub-and-spoke node diagram — central icon, dashed connectors, labelled nodes |
+| `card_name` / `card_handle` | Identity on the social card prop — use your own, not the reference channel's |
 | `subject_side` | Flip the cutout left or right |
 | `palette` | Swap the background. Light palettes auto-flip type, arrow and scrim to dark via a luminance test |
 
@@ -146,10 +149,26 @@ through to the trim and QC steps, so `rembg` is optional.
 Nate's tweet cards and payment toasts are the elements diffusion models mangle
 worst — small UI text comes out as gibberish. `app/cards.py` draws them:
 
-- `card_text` → a social post card
+- `card_text` → a social post card (`card_name` / `card_handle` set the identity)
 - `toast_text` + `toast_amount` → a notification pill
+- `diagram` → a hub-and-spoke node graph, the "1 Person Business" element
 
 Always legible, always free, and editable after the fact.
+
+## AI editing (bring your own key)
+
+`POST /edit` composes the artwork *without* the vector layer, sends it to
+OpenRouter with your instruction, then composes the headline and arrow back over
+the result. The model never touches a glyph, so typography survives every edit
+and fixing copy afterwards is still a free re-render.
+
+The key travels on the `x-openrouter-key` header — not in the body, because n8n
+persists request bodies in its execution history. It is used for one request and
+never logged or stored. `GET /edit/models` lists what is actually available with
+per-image cost estimates.
+
+Only Google and OpenAI publish image-output models on OpenRouter; there is no
+FLUX, Seedream or Stable Diffusion there.
 
 ## Optional AI hero layer
 
