@@ -233,6 +233,7 @@ PREVIEW_HTML = """
 <script>
 let STYLES=[], LAYOUT=[], OVERRIDES={}, WORDCOLORS={}, LABELS=[], PALETTE=null, HIDDEN=[];
 let last=null, timer=null, SEL=[], editing=false, activeWord=null, lastTap={id:null,t:0};
+let BEHIND=[];
 const isSel=id=>SEL.includes(id);
 const wrap=document.getElementById('wrap'), overlay=document.getElementById('overlay'),
       editor=document.getElementById('editor');
@@ -331,6 +332,7 @@ async function buildSpec(){
     headline:$('headline').value||' ', style:$('style').value, palette:$('palette').value,
     accent_words:$('accent').value.split(',').map(s=>s.trim()).filter(Boolean),
     word_colors:WORDCOLORS, arrow:$('arrow').checked, overrides:OVERRIDES, hidden:HIDDEN,
+    behind:BEHIND,
     labels:LABELS.filter(l=>(l.text||'').trim()),
     output:'base64', include_qa:true, include_layout:true
   };
@@ -444,9 +446,14 @@ function updateSelInfo(){
   // left column; nobody looking at the canvas ever found it.
   const x0=Math.min(...els.map(e=>e.x)), y0=Math.min(...els.map(e=>e.y));
   const below = y0 < 0.12;
+  // Only vector elements can change depth; the cutout defines the depth.
+  const vectorSel=els.filter(e=>/^(headline|arrow|label\\d+)$/.test(e.id));
+  const allBehind=vectorSel.length && vectorSel.every(e=>BEHIND.includes(e.id));
   tools.innerHTML=
     '<button id="tdel" class="danger" title="Delete (Del)">Delete</button>'+
     '<button id="trs" title="Reset position (R)">Reset</button>'+
+    (vectorSel.length ? '<button id="tz" title="Move behind or in front of the photo">'+
+       (allBehind?'Bring to front':'Send behind')+'</button>' : '')+
     (els.length===1&&/^label/.test(els[0].id)
        ? '<button id="tdup" title="Duplicate (Cmd/Ctrl+D)">Duplicate</button>' : '');
   tools.style.display='flex';
@@ -456,6 +463,12 @@ function updateSelInfo(){
   $('tdel').onclick=deleteSelected;
   $('trs').onclick=()=>{ SEL.forEach(id=>delete OVERRIDES[id]); schedule(); };
   if($('tdup')) $('tdup').onclick=duplicateSelected;
+  if($('tz')) $('tz').onclick=()=>{
+    vectorSel.forEach(e=>{
+      BEHIND = allBehind ? BEHIND.filter(x=>x!==e.id) : BEHIND.concat([e.id]);
+    });
+    schedule();
+  };
 }
 
 /* ---------------- drag proxy ----------------
@@ -712,7 +725,7 @@ let HIST=[], HPTR=-1, restoring=false;
 function snapshot(){
   const f={}; FIELDS.forEach(id=>f[id]=$(id).value);
   return JSON.stringify({f, arrow:$('arrow').checked, ov:OVERRIDES,
-                         hid:HIDDEN, lab:LABELS, wc:WORDCOLORS});
+                         hid:HIDDEN, beh:BEHIND, lab:LABELS, wc:WORDCOLORS});
 }
 function pushHistory(){
   if(restoring) return;
@@ -732,7 +745,7 @@ async function applyHistory(step){
   FIELDS.forEach(id=>{ if(st.f[id]!==undefined) $(id).value=st.f[id]; });
   fillPalettes(); $('palette').value=st.f.palette;
   $('arrow').checked=st.arrow;
-  OVERRIDES=st.ov; HIDDEN=st.hid; LABELS=st.lab; WORDCOLORS=st.wc;
+  OVERRIDES=st.ov; HIDDEN=st.hid; BEHIND=st.beh||[]; LABELS=st.lab; WORDCOLORS=st.wc;
   SEL=[]; drawWords(); drawLabels(); updateHiddenChip();
   restoring=false;
   await render(false);
@@ -770,7 +783,7 @@ wrap.addEventListener('pointerdown',e=>{ if(e.target===$('full')||e.target===pro
 document.querySelectorAll('#panel input,#panel select,#panel textarea').forEach(el=>{
   el.addEventListener(el.type==='file'||el.tagName==='SELECT'?'change':'input',debounce)});
 $('headline').addEventListener('input',drawWords);
-$('reset').onclick=()=>{ OVERRIDES={}; HIDDEN=[]; SEL=[]; updateHiddenChip(); schedule(); };
+$('reset').onclick=()=>{ OVERRIDES={}; HIDDEN=[]; BEHIND=[]; SEL=[]; updateHiddenChip(); schedule(); };
 $('clearcolor').onclick=()=>{ if(activeWord){ delete WORDCOLORS[activeWord]; drawWords(); schedule(); } };
 $('customhex').addEventListener('change',e=>{
   const v=e.target.value.trim();

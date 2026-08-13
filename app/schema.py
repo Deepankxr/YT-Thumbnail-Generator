@@ -122,6 +122,10 @@ class ThumbnailRequest(BaseModel):
         description="Render only these ids, on transparency. With `hidden` this "
                     "splits a frame into backdrop + isolated layer, which is what "
                     "lets the studio drag real pixels without a round trip.")
+    behind: list[str] = Field(
+        default_factory=list,
+        description="Vector ids to draw beneath the cutout (headline, arrow, "
+                    "label0...), so text can pass behind the subject.")
     include_layout: bool = Field(
         False, description="Return where each element landed, for drawing "
                            "direct-manipulation handles.")

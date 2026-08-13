@@ -254,6 +254,7 @@ def generate(req: ThumbnailRequest, x_api_key: str | None = Header(default=None)
                        for k, v in req.overrides.items()},
             hidden=req.hidden,
             only=req.only,
+            behind=req.behind,
             width=req.width,
             height=req.height,
         )

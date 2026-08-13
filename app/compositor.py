@@ -214,6 +214,7 @@ def compose(
     overrides: dict | None = None,
     hidden: list[str] | None = None,
     only: list[str] | None = None,
+    behind: list[str] | None = None,
     draw_art: bool = True,
     draw_vector: bool = True,
     width: int = BASE_W,
@@ -244,12 +245,17 @@ def compose(
     `hidden`, it splits a frame into "everything except X" and "X alone", which
     is what lets the studio drag real pixels at 60fps instead of dragging an
     empty outline and waiting for a round trip.
+
+    `behind` moves vector elements underneath the cutout — Nate's "4:30am",
+    where huge numerals pass behind the presenter. The scrim follows the
+    headline, since its whole job is to sit under it.
     """
     style: Style = get_style(style_name, palette)
     w, h = width * SCALE, height * SCALE
     ov = overrides or {}
     hide = set(hidden or [])
     solo = set(only or [])
+    back = set(behind or [])
     manifest: list[dict] = []
 
     def want(elid: str) -> bool:
@@ -347,6 +353,149 @@ def compose(
         manifest.append({"id": "hero", "type": "image", "label": "Hero / card",
                          **_norm_box(origin, fitted.size)})
 
+    # --- vector layers -----------------------------------------------------
+    # Arrow, callouts and headline are painted through one function so they can
+    # run either before the cutout (Nate's "4:30am" numerals passing behind the
+    # presenter) or after it, without duplicating the drawing code.
+    if text_position is None and diagram and diagram.get("nodes"):
+        # A diagram owns the centre, so the headline goes to the top band.
+        text_position = "top"
+
+    scrim_dir = style.scrim
+    if text_position == "top":
+        scrim_dir = "top"
+    elif text_position == "bottom":
+        scrim_dir = "bottom"
+
+    painted: set[str] = set()
+
+    def paint_vectors(phase: str) -> None:
+        """phase is "behind" (under the cutout) or "front" (over it)."""
+        if not draw_vector:
+            return
+        in_phase = lambda elid: (elid in back) == (phase == "behind")
+
+        # The scrim exists to sit under the headline, so it follows it.
+        if (in_phase("headline") and want("backdrop") and scrim_dir
+                and style.scrim_opacity > 0 and "scrim" not in painted):
+            painted.add("scrim")
+            canvas.alpha_composite(scrim((w, h), scrim_dir, style.scrim_opacity))
+
+        if arrow and want("arrow") and in_phase("arrow") and "arrow" not in painted:
+            painted.add("arrow")
+            a_ov = ov.get("arrow") or {}
+            n_from = tuple(a_ov.get("from") or style.arrow_from)
+            n_to = tuple(a_ov.get("to") or style.arrow_to)
+            canvas.alpha_composite(hand_arrow(
+                (w, h), (n_from[0] * w, n_from[1] * h), (n_to[0] * w, n_to[1] * h),
+                style.arrow_color, width=style.arrow_width * SCALE,
+                bow=style.arrow_bow, head_len=46.0 * SCALE,
+            ))
+            # Endpoints rather than a box: an arrow is dragged by its tips.
+            manifest.append({"id": "arrow", "type": "arrow", "label": "Arrow",
+                             "from": [n_from[0], n_from[1]], "to": [n_to[0], n_to[1]],
+                             "x": min(n_from[0], n_to[0]), "y": min(n_from[1], n_to[1]),
+                             "w": abs(n_to[0] - n_from[0]), "h": abs(n_to[1] - n_from[1])})
+
+        # Free-standing callouts: small text anywhere, each able to point at
+        # something with its own arrow.
+        for i, lab in enumerate(labels or []):
+            elid = f"label{i}"
+            text = str(lab.get("text", "")).strip()
+            if (not text or not want(elid) or not in_phase(elid) or elid in painted):
+                continue
+            painted.add(elid)
+            lx = float(lab.get("x", 0.1)) + float((ov.get(elid) or {}).get("dx", 0.0))
+            ly = float(lab.get("y", 0.1)) + float((ov.get(elid) or {}).get("dy", 0.0))
+            lscale = float((ov.get(elid) or {}).get("scale", 1.0))
+            size = max(10, int(float(lab.get("size", 0.055)) * h * lscale))
+            colour = parse_color(lab.get("color")) or style.text_color
+            lfont = load_font(style.font_family, size, style.font_weight, style.font_width)
+
+            ldraw = ImageDraw.Draw(canvas)
+            tw = ldraw.textlength(text, font=lfont)
+            ox, oy = lx * w, ly * h
+
+            if lab.get("shadow", True):
+                shade = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+                ImageDraw.Draw(shade).text((ox, oy), text, font=lfont, fill=(0, 0, 0, 150))
+                canvas.alpha_composite(shade.filter(ImageFilter.GaussianBlur(radius=int(8 * SCALE))))
+            ldraw.text((ox, oy), text, font=lfont, fill=colour + (255,))
+
+            target = lab.get("arrow_to")
+            if target:
+                canvas.alpha_composite(hand_arrow(
+                    (w, h), (ox + tw / 2, oy + size * 1.25),
+                    (float(target[0]) * w, float(target[1]) * h),
+                    parse_color(lab.get("arrow_color")) or colour,
+                    width=max(3, int(5 * SCALE)), bow=float(lab.get("bow", 0.22)),
+                    head_len=30.0 * SCALE,
+                ))
+
+            manifest.append({
+                "id": elid, "type": "label", "label": text[:18],
+                "x": ox / w, "y": oy / h, "w": tw / w, "h": size * 1.25 / h,
+                "font_px": size / SCALE,
+            })
+
+        if not want("headline") or not in_phase("headline") or "headline" in painted:
+            return
+        painted.add("headline")
+
+        copy = _apply_case(headline, style.text_case)
+        text_rect = style.text_box
+        if text_position == "top":
+            text_rect = (text_rect[0], 0.06, text_rect[2], text_rect[3])
+        elif text_position == "bottom":
+            text_rect = (text_rect[0], 1.0 - text_rect[3] - 0.06, text_rect[2], text_rect[3])
+        text_rect = _shift(text_rect, "headline")
+        box = _denorm(text_rect, w, h)
+        pill_pad_x = int(style.accent_pad[0] * SCALE)
+        layout = layout_headline(
+            copy, box, style.font_family, style.font_weight,
+            max_lines=style.max_lines, line_height=style.line_height,
+            align=style.text_align, valign=style.text_valign,
+            accent_words=set(accent_words or []), tracking=style.tracking,
+            accent_pad_x=pill_pad_x if style.accent_fill else 0.0,
+            font_width=style.font_width,
+        )
+        if style.underline_color:
+            underline(canvas, layout, style.underline_color, style.font_family,
+                      style.font_weight,
+                      width=int((14 if style.underline_swash else 8) * SCALE),
+                      gap=int(7 * SCALE), swash=style.underline_swash)
+        paint_headline(
+            canvas, layout, style.font_family, style.font_weight,
+            color=style.text_color, accent_color=style.accent_color,
+            accent_fill=style.accent_fill, shadow=style.shadow,
+            shadow_opacity=style.shadow_opacity,
+            shadow_blur=int(style.shadow_blur * SCALE / 2),
+            shadow_offset=(0, int(6 * SCALE)),
+            stroke_width=style.stroke_width * SCALE // 2,
+            stroke_color=style.stroke_color,
+            pill_pad=(pill_pad_x, int(style.accent_pad[1] * SCALE)),
+            pill_radius=(style.accent_radius * SCALE if style.accent_radius is not None else None),
+            word_colors={k: parse_color(v) for k, v in (word_colors or {}).items()},
+        )
+
+        if layout.runs:
+            # The painted ink, not the layout box — a selection rectangle around
+            # empty space above the text would feel broken to drag.
+            left = min(r.x for r in layout.runs)
+            right = max(r.x + r.width for r in layout.runs)
+            top = min(r.y for r in layout.runs)
+            bottom = max(r.y for r in layout.runs) + layout.size
+            manifest.append({
+                "id": "headline", "type": "text", "label": "Headline",
+                "x": left / w, "y": top / h,
+                "w": (right - left) / w, "h": (bottom - top) / h,
+                "font_px": layout.size / SCALE,
+                "align": style.text_align,
+                "color": "#%02x%02x%02x" % style.text_color,
+            })
+
+    paint_vectors("behind")
+
     # --- subject cutout ---------------------------------------------------
     refs: list[str | None] = list(subjects) if subjects else [subject]
     box_rect = style.subject_box
@@ -374,76 +523,9 @@ def compose(
     if draw_art and want("backdrop") and style.vignette_strength > 0:
         canvas.alpha_composite(vignette((w, h), style.vignette_strength))
 
-    # --- scrim behind the headline ----------------------------------------
-    scrim_dir = style.scrim
-    if text_position == "top":
-        scrim_dir = "top"
-    elif text_position == "bottom":
-        scrim_dir = "bottom"
-    if draw_vector and want("backdrop") and scrim_dir and style.scrim_opacity > 0:
-        canvas.alpha_composite(scrim((w, h), scrim_dir, style.scrim_opacity))
+    paint_vectors("front")
 
-    # --- arrow ------------------------------------------------------------
-    if arrow and draw_vector and want("arrow"):
-        a_ov = ov.get("arrow") or {}
-        n_from = tuple(a_ov.get("from") or style.arrow_from)
-        n_to = tuple(a_ov.get("to") or style.arrow_to)
-        start = (n_from[0] * w, n_from[1] * h)
-        end = (n_to[0] * w, n_to[1] * h)
-        canvas.alpha_composite(hand_arrow(
-            (w, h), start, end, style.arrow_color,
-            width=style.arrow_width * SCALE, bow=style.arrow_bow,
-            head_len=46.0 * SCALE,
-        ))
-        # Endpoints rather than a box: an arrow is dragged by its tips.
-        manifest.append({"id": "arrow", "type": "arrow", "label": "Arrow",
-                         "from": [n_from[0], n_from[1]], "to": [n_to[0], n_to[1]],
-                         "x": min(n_from[0], n_to[0]), "y": min(n_from[1], n_to[1]),
-                         "w": abs(n_to[0] - n_from[0]), "h": abs(n_to[1] - n_from[1])})
-
-    # --- free-standing labels ---------------------------------------------
-    # Nate's "opus" / "fable" callouts: small text anywhere, each able to point
-    # at something with its own arrow.
-    for i, lab in enumerate(labels or []):
-        text = str(lab.get("text", "")).strip()
-        if not text or not draw_vector or not want(f"label{i}"):
-            continue
-        lx = float(lab.get("x", 0.1)) + float((ov.get(f"label{i}") or {}).get("dx", 0.0))
-        ly = float(lab.get("y", 0.1)) + float((ov.get(f"label{i}") or {}).get("dy", 0.0))
-        lscale = float((ov.get(f"label{i}") or {}).get("scale", 1.0))
-        size = max(10, int(float(lab.get("size", 0.055)) * h * lscale))
-        colour = parse_color(lab.get("color")) or style.text_color
-        lfont = load_font(style.font_family, size, style.font_weight, style.font_width)
-
-        ldraw = ImageDraw.Draw(canvas)
-        tw = ldraw.textlength(text, font=lfont)
-        ox, oy = lx * w, ly * h
-
-        if lab.get("shadow", True):
-            shade = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-            ImageDraw.Draw(shade).text((ox, oy), text, font=lfont, fill=(0, 0, 0, 150))
-            canvas.alpha_composite(shade.filter(ImageFilter.GaussianBlur(radius=int(8 * SCALE))))
-        ldraw.text((ox, oy), text, font=lfont, fill=colour + (255,))
-
-        target = lab.get("arrow_to")
-        if target:
-            canvas.alpha_composite(hand_arrow(
-                (w, h), (ox + tw / 2, oy + size * 1.25),
-                (float(target[0]) * w, float(target[1]) * h),
-                parse_color(lab.get("arrow_color")) or colour,
-                width=max(3, int(5 * SCALE)), bow=float(lab.get("bow", 0.22)),
-                head_len=30.0 * SCALE,
-            ))
-
-        manifest.append({
-            "id": f"label{i}", "type": "label", "label": text[:18],
-            "x": ox / w, "y": oy / h, "w": tw / w, "h": size * 1.25 / h,
-            "font_px": size / SCALE,
-        })
-
-    # --- headline ---------------------------------------------------------
-    if not draw_vector or not want("headline"):
-        return _finish(canvas, width, height, bool(solo)), manifest
+    return _finish(canvas, width, height, bool(solo)), manifest
 
     copy = _apply_case(headline, style.text_case)
     text_rect = style.text_box

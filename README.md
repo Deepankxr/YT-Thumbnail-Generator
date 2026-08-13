@@ -111,6 +111,7 @@ The presets are a starting point, not a cage. Every knob below is per-request.
 | `subject_side` | Flip the cutout left or right |
 | `hidden` | Drop elements by id (`headline`, `subject`, `hero`, `arrow`, `icons`, `label0`…). Deletion in the studio; restorable |
 | `only` | Render just these ids on transparency. With `hidden` it splits a frame into backdrop + isolated layer |
+| `behind` | Draw vector ids *beneath* the cutout, so text can pass behind the subject |
 | `palette` | Swap the background. Light palettes auto-flip type, arrow and scrim to dark via a luminance test |
 
 Typography is driven off variable-font axes, so `ottley`'s compressed caps come
