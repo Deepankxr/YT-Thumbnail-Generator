@@ -25,6 +25,16 @@ class EditRequest(BaseModel):
     include_qa: bool = False
 
 
+class AnalyzeRequest(BaseModel):
+    """Read a reference thumbnail and propose a spec that approximates it."""
+
+    url: str = Field(..., min_length=5, max_length=500,
+                     description="YouTube link, bare 11-char video id, or a direct image URL.")
+    model: str = Field("anthropic/claude-sonnet-5", description="OpenRouter vision model id.")
+    include_reference: bool = Field(
+        True, description="Return the reference image too, for side-by-side comparison.")
+
+
 class Label(BaseModel):
     """A free-standing caption, optionally pointing at something."""
 

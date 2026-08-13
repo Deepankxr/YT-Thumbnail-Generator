@@ -55,6 +55,8 @@ runs entirely in the browser — no network between mouse-down and release.
 | GET | `/preview` | Browser UI for editing thumbnails |
 | GET | `/styles` | Presets, palettes, font and accent treatment |
 | POST | `/generate` | Render a thumbnail |
+| POST | `/analyze` | Read a reference thumbnail from a YouTube link, return a spec |
+| POST | `/edit` | Edit the artwork with a model, keeping typography exact |
 
 Set `THUMB_API_KEY` to require an `x-api-key` header.
 
@@ -183,6 +185,26 @@ worst — small UI text comes out as gibberish. `app/cards.py` draws them:
 - `diagram` → a hub-and-spoke node graph, the "1 Person Business" element
 
 Always legible, always free, and editable after the fact.
+
+## Recreate from a reference
+
+`POST /analyze` takes a YouTube link (watch, youtu.be, shorts, embed, a bare
+video id, or a direct image URL), fetches the thumbnail, and has a vision model
+return a spec for this renderer. In the studio it's the "Recreate from a link"
+field: paste, click, and every control is populated for you to tune.
+
+What transfers is the **structure** — layout, style, palette, emphasis, depth,
+callouts, diagrams. What doesn't is the original's photography, background art
+and 3D props, because the renderer has no access to them. That's the reusable
+part anyway.
+
+`subject` is never set from a reference. The person in someone else's thumbnail
+is not yours to reproduce; the slot is there for your own cutout.
+
+The model is told the live catalogue of styles and palettes, generated from the
+presets rather than hardcoded, so it can't name one that doesn't exist. Anything
+it invents anyway is dropped and reported in `warnings` rather than failing the
+whole analysis.
 
 ## AI editing (bring your own key)
 

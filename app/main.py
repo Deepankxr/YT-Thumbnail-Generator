@@ -25,12 +25,13 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from PIL import Image
 
 from . import __version__
+from .analyze import VISION_MODELS, analyze, fetch_thumbnail, video_id
 from .assets import FONT_DIR, FONT_FILES
 from .compositor import compose, legibility_report
 from .openrouter import OpenRouterError, edit_image, list_models
 from .preview import PREVIEW_HTML
 from .hero import HeroUnavailable, generate_hero
-from .schema import EditRequest, ThumbnailRequest
+from .schema import AnalyzeRequest, EditRequest, ThumbnailRequest
 from .styles import STYLES, WORD_PALETTE
 
 MIME = "image/png"
@@ -128,6 +129,57 @@ def edit_models():
         return {"models": list_models()}
     except OpenRouterError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/analyze/models")
+def analyze_models():
+    """Vision models offered for reading a reference thumbnail."""
+    return {"models": [{"id": i, "label": l, "note": n} for i, l, n in VISION_MODELS]}
+
+
+@app.post("/analyze")
+def analyze_url(
+    req: AnalyzeRequest,
+    x_api_key: str | None = Header(default=None),
+    x_openrouter_key: str | None = Header(default=None),
+):
+    """Read a reference thumbnail and return a spec that approximates its design.
+
+    What comes back is a starting point, not a copy: the renderer has no access
+    to the original's photography or artwork, so the transferable part is the
+    structure. `subject` is deliberately never set — the caller supplies their
+    own cutout.
+    """
+    _check_key(x_api_key)
+
+    key = (x_openrouter_key or "").strip()
+    if not key:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing x-openrouter-key header. Analysis bills to your own "
+                   "OpenRouter key; this service never stores it.")
+
+    try:
+        image_b64, source = fetch_thumbnail(req.url)
+        spec, warnings, notes = analyze(image_b64, key, req.model)
+    except OpenRouterError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    # Fail here rather than letting a bad spec surface as a render error later.
+    try:
+        ThumbnailRequest(**spec)
+    except Exception as exc:
+        raise HTTPException(status_code=502,
+                            detail=f"model returned a spec the renderer rejects: {exc}") from exc
+
+    return {
+        "spec": spec,
+        "warnings": warnings,
+        "notes": notes,
+        "reference": {"url": source, "video_id": video_id(req.url),
+                      "data": image_b64 if req.include_reference else None},
+        "model": req.model,
+    }
 
 
 @app.post("/edit")

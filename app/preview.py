@@ -211,6 +211,13 @@ PREVIEW_HTML = """
  <div class="sub">Describe a change to the artwork. Text is always redrawn on top,
    so typography survives every edit.</div>
 
+ <label>Recreate from a link</label>
+ <input type="text" id="refurl" placeholder="YouTube URL or video id">
+ <select id="vismodel" style="margin-top:6px"></select>
+ <button class="ghost" id="analyze">Analyse &amp; rebuild</button>
+ <div id="anotes" class="sub" style="margin-top:7px"></div>
+
+ <hr>
  <label>OpenRouter key</label>
  <input type="password" id="orkey" placeholder="sk-or-v1-..." autocomplete="off">
  <div class="sub" style="margin:5px 0 0;font-size:10.5px">
@@ -251,8 +258,75 @@ async function boot(){
   STYLES.forEach(st=>{const o=document.createElement('option');o.value=st.name;
     o.textContent=st.name+' \\u2014 '+st.accent;s.appendChild(o)});
   s.onchange=()=>{fillPalettes();schedule()};
-  fillPalettes(); drawWords(); drawSwatches(); drawLabels(); loadEditModels(); render(false);
+  fillPalettes(); drawWords(); drawSwatches(); drawLabels();
+  loadEditModels(); loadVisionModels(); render(false);
 }
+
+/* ---------------- recreate from a reference ---------------- */
+async function loadVisionModels(){
+  const sel=$('vismodel');
+  try{
+    const {models}=await (await fetch('analyze/models')).json();
+    models.forEach(m=>{ const o=document.createElement('option');
+      o.value=m.id; o.textContent=m.label; o.title=m.note; sel.appendChild(o); });
+  }catch(e){ const o=document.createElement('option');
+    o.textContent='could not reach OpenRouter'; sel.appendChild(o); }
+}
+
+/* Reverse of buildSpec: push an analysed spec back into the controls so every
+   field stays editable afterwards. */
+function applySpec(sp){
+  $('headline').value = sp.headline || '';
+  if(sp.style){ $('style').value=sp.style; fillPalettes(); }
+  if(sp.palette) $('palette').value=sp.palette;
+  $('accent').value = (sp.accent_words||[]).join(', ');
+  WORDCOLORS = sp.word_colors || {};
+  $('textpos').value = sp.text_position || '';
+  $('side').value = sp.subject_side || '';
+  $('arrow').checked = !!sp.arrow;
+  BEHIND = sp.behind || [];
+  LABELS = (sp.labels||[]).map(l=>Object.assign({size:0.055}, l));
+  $('card').value = sp.card_text || '';
+  $('toastt').value = sp.toast_text || '';
+  $('toasta').value = sp.toast_amount || '';
+  $('dnodes').value = ((sp.diagram||{}).nodes||[]).map(n=>n.label).join('\\n');
+  $('dcenter').value = (sp.diagram||{}).center_label || '';
+  OVERRIDES={}; HIDDEN=[]; SEL=[];
+  drawWords(); drawLabels(); updateHiddenChip();
+}
+
+async function runAnalyze(){
+  const key=$('orkey').value.trim(), url=$('refurl').value.trim();
+  const out=$('anotes');
+  if(!key){ out.textContent='Paste your OpenRouter key below first.'; return; }
+  if(!url){ out.textContent='Paste a YouTube link or video id.'; return; }
+  out.textContent='Reading the reference\u2026';
+  $('analyze').disabled=true;
+  try{
+    const r=await fetch('analyze',{method:'POST',
+      headers:{'Content-Type':'application/json','x-openrouter-key':key},
+      body:JSON.stringify({url, model:$('vismodel').value})});
+    if(!r.ok){ let d; try{d=(await r.json()).detail}catch(e){d=r.statusText}
+               out.textContent=String(d); return; }
+    const j=await r.json();
+    applySpec(j.spec);
+    await render(false);
+    const bits=[];
+    if(j.notes) bits.push(j.notes);
+    if(j.warnings&&j.warnings.length) bits.push('Adjusted: '+j.warnings.join('; '));
+    bits.push('Add your own photo \u2014 the reference\u2019s person is never copied.');
+    out.textContent=bits.join(' ');
+    if(j.reference&&j.reference.data){
+      addMsg('ai','Rebuilt from reference','data:image/jpeg;base64,'+j.reference.data,
+             'reference \u00b7 '+j.model);
+    }
+  }catch(e){ out.textContent='Failed: '+e.message; }
+  finally{ $('analyze').disabled=false; }
+}
+$('analyze').onclick=runAnalyze;
+$('refurl').addEventListener('keydown',e=>{
+  if(e.key==='Enter'||e.keyCode===13){ e.preventDefault(); runAnalyze(); }
+});
 function fillPalettes(){
   const st=STYLES.find(x=>x.name===$('style').value), p=$('palette');
   p.innerHTML='';
