@@ -20,7 +20,7 @@ import os
 import re
 
 from fastapi import FastAPI, Header, HTTPException, Response
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from . import __version__
 from .compositor import legibility_report, render
@@ -53,6 +53,12 @@ def _accent_kind(style) -> str:
     if style.underline_color:
         return "swash" if style.underline_swash else "underline"
     return "none"
+
+
+@app.get("/", include_in_schema=False)
+def root():
+    """Opening the bare host should land on the studio, not a 404."""
+    return RedirectResponse(url="/preview")
 
 
 @app.get("/preview", response_class=HTMLResponse)
