@@ -203,6 +203,8 @@ def compose(
     subject_side: str | None = None,
     text_position: str | None = None,
     overrides: dict | None = None,
+    draw_art: bool = True,
+    draw_vector: bool = True,
     width: int = BASE_W,
     height: int = BASE_H,
 ) -> tuple[Image.Image, list[dict]]:
@@ -219,6 +221,11 @@ def compose(
          "arrow": {"from": [0.3, 0.4], "to": [0.5, 0.6]}}
     Offsets are deltas rather than absolutes so that switching style keeps the
     user's intent ("a bit left of wherever this preset puts it").
+
+    `draw_art` and `draw_vector` split the render in two so an AI edit can touch
+    the artwork without touching the typography: compose the plate with
+    draw_vector=False, send that to a model, then compose again over the result
+    with draw_art=False to lay exact text back on top.
     """
     style: Style = get_style(style_name, palette)
     w, h = width * SCALE, height * SCALE
@@ -259,11 +266,14 @@ def compose(
         top = max(0, (plate.height - h) // 2)
         canvas.paste(plate.crop((left, top, left + w, top + h)), (0, 0))
         _ = origin
-    else:
+    elif draw_art:
         canvas = linear_gradient((w, h), style.bg_top, style.bg_bottom, style.bg_angle)
+    else:
+        # Vector-only pass with no plate supplied: transparent, nothing to cover.
+        canvas = Image.new("RGBA", (w, h), (0, 0, 0, 0))
 
     # --- backlight --------------------------------------------------------
-    if style.glow_color and style.glow_intensity > 0:
+    if draw_art and style.glow_color and style.glow_intensity > 0:
         gc = (style.glow_center[0] * w, style.glow_center[1] * h)
         canvas.alpha_composite(
             radial_glow((w, h), gc, style.glow_radius * w * 0.5, style.glow_color, style.glow_intensity)
@@ -271,7 +281,9 @@ def compose(
 
     # --- hero visual / rendered prop --------------------------------------
     hero_layer: Image.Image | None = None
-    if hero:
+    if not draw_art:
+        hero_layer = None
+    elif hero:
         hero_img = load_image(hero)
         if hero_img is not None:
             hero_layer = hero_img
@@ -307,16 +319,16 @@ def compose(
         anchor = anchor.replace("left", "right")
 
     subject_bbox = _place_subjects(canvas, refs, style, _shift(box_rect, "subject"),
-                                   anchor, w, h)
+                                   anchor, w, h) if draw_art else None
     if subject_bbox:
         manifest.append({"id": "subject", "type": "image", "label": "Photo",
                          **_norm_box(subject_bbox[0], subject_bbox[1])})
 
-    if icons:
+    if icons and draw_art:
         _place_icons(canvas, icons, style, w, h)
 
     # --- vignette ---------------------------------------------------------
-    if style.vignette_strength > 0:
+    if draw_art and style.vignette_strength > 0:
         canvas.alpha_composite(vignette((w, h), style.vignette_strength))
 
     # --- scrim behind the headline ----------------------------------------
@@ -325,11 +337,11 @@ def compose(
         scrim_dir = "top"
     elif text_position == "bottom":
         scrim_dir = "bottom"
-    if scrim_dir and style.scrim_opacity > 0:
+    if draw_vector and scrim_dir and style.scrim_opacity > 0:
         canvas.alpha_composite(scrim((w, h), scrim_dir, style.scrim_opacity))
 
     # --- arrow ------------------------------------------------------------
-    if arrow:
+    if arrow and draw_vector:
         a_ov = ov.get("arrow") or {}
         n_from = tuple(a_ov.get("from") or style.arrow_from)
         n_to = tuple(a_ov.get("to") or style.arrow_to)
@@ -347,6 +359,9 @@ def compose(
                          "w": abs(n_to[0] - n_from[0]), "h": abs(n_to[1] - n_from[1])})
 
     # --- headline ---------------------------------------------------------
+    if not draw_vector:
+        return canvas.convert("RGB").resize((width, height), Image.LANCZOS), manifest
+
     copy = _apply_case(headline, style.text_case)
     text_rect = style.text_box
     if text_position == "top":

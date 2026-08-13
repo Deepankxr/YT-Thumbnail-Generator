@@ -22,12 +22,15 @@ import re
 from fastapi import FastAPI, Header, HTTPException, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
+from PIL import Image
+
 from . import __version__
 from .assets import FONT_DIR, FONT_FILES
 from .compositor import compose, legibility_report
+from .openrouter import OpenRouterError, edit_image, list_models
 from .preview import PREVIEW_HTML
 from .hero import HeroUnavailable, generate_hero
-from .schema import ThumbnailRequest
+from .schema import EditRequest, ThumbnailRequest
 from .styles import STYLES, WORD_PALETTE
 
 MIME = "image/png"
@@ -114,6 +117,99 @@ def palette():
         "accents": {s.name: "#%02x%02x%02x" % s.accent_fill
                     for s in STYLES.values() if s.accent_fill},
     }
+
+
+@app.get("/edit/models")
+def edit_models():
+    """Image-editing models available on OpenRouter. No key needed — the list is
+    public, so the picker can populate before the user has pasted anything."""
+    try:
+        return {"models": list_models()}
+    except OpenRouterError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/edit")
+def edit(
+    req: EditRequest,
+    x_api_key: str | None = Header(default=None),
+    x_openrouter_key: str | None = Header(default=None),
+):
+    """Edit the artwork with a model, then lay the exact typography back on top.
+
+    Three passes: compose the plate without the vector layer, send that to
+    OpenRouter, then compose the vector layer over whatever comes back. The
+    model never touches a glyph, so the headline cannot come back mangled and
+    fixing copy afterwards is still free.
+
+    The OpenRouter key comes from the `x-openrouter-key` header and is used for
+    this request only — never logged, never stored.
+    """
+    _check_key(x_api_key)
+
+    key = (x_openrouter_key or "").strip()
+    if not key:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing x-openrouter-key header. Editing bills to your own "
+                   "OpenRouter key; this service never stores it.")
+
+    spec = req.spec
+    common = dict(
+        headline=spec.headline, style_name=spec.style, palette=spec.palette,
+        accent_words=spec.accent_words, word_colors=spec.word_colors,
+        arrow=spec.arrow, subject_side=spec.subject_side,
+        text_position=spec.text_position,
+        overrides={k: v.model_dump(by_alias=True, exclude_none=True)
+                   for k, v in spec.overrides.items()},
+        width=spec.width, height=spec.height,
+    )
+
+    try:
+        plate, _ = compose(
+            subject=spec.subject, subjects=spec.subjects, icons=spec.icons,
+            hero=spec.hero, background=spec.background,
+            card_text=spec.card_text, card_name=spec.card_name,
+            card_handle=spec.card_handle, toast_text=spec.toast_text,
+            toast_amount=spec.toast_amount,
+            draw_vector=False, **common,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    buf = io.BytesIO()
+    plate.save(buf, format="PNG")
+    plate_b64 = base64.b64encode(buf.getvalue()).decode()
+
+    try:
+        edited_b64 = edit_image(plate_b64, req.instruction, req.model, key)
+    except OpenRouterError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if not req.redraw_text:
+        data = base64.b64decode(edited_b64)
+        img = Image.open(io.BytesIO(data)).convert("RGB")
+    else:
+        try:
+            img, _ = compose(background=edited_b64, draw_art=False, **common)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        buf = io.BytesIO()
+        img.save(buf, format="PNG", optimize=True)
+        data = buf.getvalue()
+
+    qa = legibility_report(img, spec.style, text_position=spec.text_position) if req.include_qa else None
+    filename = _filename(spec).replace(".png", "-edited.png")
+
+    if req.output == "base64":
+        return JSONResponse({"filename": filename, "mimeType": MIME,
+                             "data": base64.b64encode(data).decode(),
+                             "qa": qa, "model": req.model})
+
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    if qa:
+        headers["x-qa-verdict"] = qa["verdict"]
+    return Response(content=data, media_type=MIME, headers=headers)
 
 
 @app.post("/generate")

@@ -7,6 +7,24 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+class EditRequest(BaseModel):
+    """Compose a thumbnail, have a model edit the artwork, then redraw the text.
+
+    Carries a full ThumbnailRequest so the vector layer can be laid back down
+    exactly as it was — the model never sees or regenerates the typography.
+    """
+
+    spec: "ThumbnailRequest"
+    instruction: str = Field(..., min_length=3, max_length=1000,
+                             description="What the model should change about the artwork.")
+    model: str = Field("google/gemini-3-pro-image", description="OpenRouter model id.")
+    redraw_text: bool = Field(
+        True, description="Redraw headline and arrow over the edited artwork. "
+                          "Turn off only if you want the model's raw output.")
+    output: Literal["binary", "base64"] = "base64"
+    include_qa: bool = False
+
+
 class ElementOverride(BaseModel):
     """A nudge applied on top of the preset's placement for one element."""
 

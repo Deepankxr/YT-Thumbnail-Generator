@@ -137,6 +137,23 @@ PREVIEW_HTML = """
  </div>
  <div class="chk"><input type="checkbox" id="arrow" checked><label for="arrow">Show arrow</label></div>
 
+ <hr>
+ <label>AI edit &mdash; your OpenRouter key</label>
+ <input type="password" id="orkey" placeholder="sk-or-v1-..." autocomplete="off">
+ <div class="sub" style="margin:6px 0 0">
+   Billed to your key. Held in this tab only &mdash; never sent anywhere but
+   OpenRouter, never stored on the server.
+ </div>
+ <label>Model</label>
+ <select id="ormodel"></select>
+ <label>What should change?</label>
+ <textarea id="orinstr" placeholder="Cinematic teal and orange grade, soft rim light on the subject, darker background."></textarea>
+ <div class="chk"><input type="checkbox" id="orredraw" checked>
+   <label for="orredraw">Redraw text after editing (recommended)</label></div>
+ <button class="ghost" id="orgo">Edit artwork with AI</button>
+ <div id="orstatus" class="sub" style="margin-top:8px"></div>
+
+ <hr>
  <button id="dl">Download PNG</button>
  <button class="ghost" id="reset">Reset all positions</button>
  <div class="hint">
@@ -176,7 +193,52 @@ async function boot(){
   STYLES.forEach(st=>{const o=document.createElement('option');o.value=st.name;
     o.textContent=st.name+' \\u2014 '+st.accent;s.appendChild(o)});
   s.onchange=()=>{fillPalettes();render()};
-  fillPalettes(); drawWords(); drawSwatches(); render();
+  fillPalettes(); drawWords(); drawSwatches(); loadEditModels(); render();
+}
+
+/* ---------------- AI edit ---------------- */
+async function loadEditModels(){
+  const sel=$('ormodel');
+  try{
+    const {models}=await (await fetch('edit/models')).json();
+    models.forEach(m=>{
+      const o=document.createElement('option'); o.value=m.id;
+      const cost=m.estimated_cost_per_image ? ' \u2014 ~$'+m.estimated_cost_per_image.toFixed(3) : '';
+      o.textContent=m.label+cost; o.title=m.note;
+      sel.appendChild(o);
+    });
+  }catch(e){
+    const o=document.createElement('option'); o.textContent='could not reach OpenRouter'; sel.appendChild(o);
+  }
+  // sessionStorage, not localStorage: the key dies with the tab.
+  const saved=sessionStorage.getItem('orkey'); if(saved) $('orkey').value=saved;
+  $('orkey').addEventListener('change',e=>sessionStorage.setItem('orkey',e.target.value.trim()));
+}
+
+async function runEdit(){
+  const key=$('orkey').value.trim(), instr=$('orinstr').value.trim();
+  const st=$('orstatus');
+  if(!key){ st.textContent='Paste your OpenRouter key first.'; return; }
+  if(instr.length<3){ st.textContent='Describe what should change.'; return; }
+
+  st.textContent='Editing artwork\u2026 this bills your key.';
+  $('orgo').disabled=true;
+  try{
+    const r=await fetch('edit',{method:'POST',
+      headers:{'Content-Type':'application/json','x-openrouter-key':key},
+      body:JSON.stringify({spec:await buildSpec(), instruction:instr,
+                           model:$('ormodel').value, redraw_text:$('orredraw').checked,
+                           include_qa:true, output:'base64'})});
+    if(!r.ok){ let d; try{d=(await r.json()).detail}catch(e){d=r.statusText}
+               st.textContent='Failed: '+d; return; }
+    const j=await r.json();
+    const src='data:image/png;base64,'+j.data;
+    $('full').src=src; $('feed').src=src; last=j;
+    overlay.innerHTML='';   // handles no longer match the edited pixels
+    LAYOUT=[]; selected=null;
+    st.textContent='Edited with '+j.model+'. Change any field to go back to the clean render.';
+  }catch(e){ st.textContent='Failed: '+e.message; }
+  finally{ $('orgo').disabled=false; }
 }
 function fillPalettes(){
   const st=STYLES.find(x=>x.name===$('style').value), p=$('palette');
@@ -238,8 +300,7 @@ function applyColor(hex){
 }
 function ovFor(id){ return OVERRIDES[id] || (OVERRIDES[id]={dx:0,dy:0,scale:1}); }
 
-async function render(){
-  $('err').textContent='';
+async function buildSpec(){
   const body={
     headline:$('headline').value||' ', style:$('style').value, palette:$('palette').value,
     accent_words:$('accent').value.split(',').map(s=>s.trim()).filter(Boolean),
@@ -254,7 +315,12 @@ async function render(){
   if(tt&&ta){body.toast_text=tt;body.toast_amount=ta;}
   const su=await fileAsDataURL($('subject')); if(su)body.subject=su;
   const he=await fileAsDataURL($('hero')); if(he)body.hero=he;
+  return body;
+}
 
+async function render(){
+  $('err').textContent='';
+  const body=await buildSpec();
   const r=await fetch('generate',{method:'POST',headers:{'Content-Type':'application/json'},
                                   body:JSON.stringify(body)});
   if(!r.ok){ let d; try{d=(await r.json()).detail}catch(e){d=r.statusText}
@@ -454,6 +520,7 @@ $('customhex').addEventListener('change',e=>{
   if(/^#?[0-9a-fA-F]{6}$/.test(v)) applyColor(v.startsWith('#')?v:'#'+v);
   else if(v) $('err').textContent='Custom colour must be a 6-digit hex, e.g. #FFD400';
 });
+$('orgo').onclick=runEdit;
 $('dl').onclick=()=>{ if(!last)return;
   const a=document.createElement('a'); a.href='data:image/png;base64,'+last.data;
   a.download=last.filename; a.click(); };
