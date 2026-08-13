@@ -671,3 +671,71 @@ def test_rotation_survives_the_api():
                                        "overrides": {"subject": {"rotate": -20}}})
     assert r.status_code == 200
     assert any(m["id"] == "subject" for m in r.json()["layout"])
+
+
+# --------------------------------------------------------------------------- #
+# Card props
+# --------------------------------------------------------------------------- #
+
+CARD_TYPES = [c["type"] for c in client.get("/cards").json()["cards"]]
+
+
+@pytest.mark.parametrize("kind", CARD_TYPES)
+def test_every_card_type_renders(kind):
+    card = {"type": kind, "text": "$45,208", "sublabel": "last 30 days",
+            "items": ["one", "two", "three"], "metrics": ["792", "1.4K"]}
+    img, manifest = compose(headline="x", style_name="herk", palette="desk",
+                            arrow=False, card=card)
+    assert img.size == (1280, 720)
+    assert any(m["id"] == "hero" for m in manifest), f"{kind} produced no prop"
+
+
+@pytest.mark.parametrize("kind", CARD_TYPES)
+def test_card_types_are_visually_distinct(kind):
+    base, _ = compose(headline="x", style_name="herk", palette="desk", arrow=False,
+                      hidden=["subject", "headline"])
+    card, _ = compose(headline="x", style_name="herk", palette="desk", arrow=False,
+                      hidden=["subject", "headline"],
+                      card={"type": kind, "text": "Body", "sublabel": "sub",
+                            "items": ["a", "b"], "metrics": ["1"]})
+    assert base.tobytes() != card.tobytes()
+
+
+def test_cards_endpoint_matches_the_schema():
+    """A type listed but not accepted would break the studio's dropdown."""
+    from app.schema import CARD_TYPES as declared
+    assert set(CARD_TYPES) == set(declared)
+
+
+def test_legacy_card_fields_still_work():
+    """Callers written before `card` existed must keep rendering."""
+    old, _ = compose(headline="x", style_name="herk", arrow=False,
+                     card_text="Body", card_name="Me", card_handle="@me")
+    new, _ = compose(headline="x", style_name="herk", arrow=False,
+                     card={"type": "tweet", "text": "Body", "name": "Me", "handle": "@me"})
+    assert old.tobytes() == new.tobytes()
+
+    toast_old, _ = compose(headline="x", style_name="herk", arrow=False,
+                           toast_text="Paid", toast_amount="$10")
+    toast_new, _ = compose(headline="x", style_name="herk", arrow=False,
+                           card={"type": "toast", "text": "Paid", "sublabel": "$10"})
+    assert toast_old.tobytes() == toast_new.tobytes()
+
+
+def test_card_rejects_an_unknown_type():
+    r = client.post("/generate", json={"headline": "x", "card": {"type": "hologram"}})
+    assert r.status_code == 422
+
+
+def test_studio_builds_the_card_picker_from_the_api():
+    """The picker must come from /cards, or it goes stale when a type is added.
+
+    Checked on the markup rather than by scanning for the type names: "chat" is
+    also the id of the AI column, so a bare substring search reports a false
+    hardcoding.
+    """
+    picker = re.search(r'<select id="cardtype">(.*?)</select>', PREVIEW_HTML, re.S)
+    assert picker, "card picker missing"
+    options = re.findall(r'<option[^>]*value="([^"]*)"', picker.group(1))
+    assert options == [""], f"picker ships hardcoded options: {options}"
+    assert "fetch('cards')" in PREVIEW_HTML

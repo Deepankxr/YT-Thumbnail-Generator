@@ -63,6 +63,52 @@ def _denorm(rect: tuple[float, float, float, float], w: int, h: int) -> tuple[in
     return (int(rect[0] * w), int(rect[1] * h), int(rect[2] * w), int(rect[3] * h))
 
 
+CARD_WIDTHS = {"tweet": 0.42, "toast": 0.36, "stat": 0.34, "checklist": 0.34,
+               "prompt": 0.44, "chat": 0.40, "terminal": 0.44}
+
+
+def _render_card(spec: dict, w: int, style: Style) -> Image.Image | None:
+    """Build whichever prop `spec["type"]` names, already drop-shadowed."""
+    kind = spec.get("type")
+    width = int(w * CARD_WIDTHS.get(kind, 0.40))
+    scale = SCALE * 0.9
+    accent = parse_color(spec.get("accent"))
+    dark = bool(spec.get("dark", True))
+    text = str(spec.get("text", ""))
+    items = [str(i) for i in (spec.get("items") or [])]
+
+    if kind == "tweet":
+        built = cards.social_card(width, text or "Your post text here.",
+                                  display_name=spec.get("name", "Your Name"),
+                                  handle=spec.get("handle", "@yourhandle"),
+                                  dark=dark, scale=scale,
+                                  metrics=[str(m) for m in (spec.get("metrics") or [])],
+                                  **({"accent": accent} if accent else {}))
+    elif kind == "toast":
+        built = cards.toast(width, text or "Payment received",
+                            str(spec.get("sublabel") or "$0"), scale=scale,
+                            **({"accent": accent} if accent else {}))
+    elif kind == "stat":
+        built = cards.stat_card(width, text or "$0", str(spec.get("sublabel") or "last 30 days"),
+                                scale=scale, dark=dark,
+                                **({"accent": accent} if accent else {}))
+    elif kind == "checklist":
+        built = cards.checklist_card(width, items, title=text, scale=scale)
+    elif kind == "prompt":
+        built = cards.prompt_card(width, text or "Describe a task or ask a question",
+                                  scale=scale, dark=dark,
+                                  **({"accent": accent} if accent else {}))
+    elif kind == "chat":
+        built = cards.chat_card(width, items or [text or "Hello"], scale=scale, dark=dark,
+                                **({"accent": accent} if accent else {}))
+    elif kind == "terminal":
+        built = cards.terminal_card(width, items or [text or "$ run"], scale=scale,
+                                    **({"accent": accent} if accent else {}))
+    else:
+        return None
+    return cards.with_shadow(built)
+
+
 def _luma(rgb: tuple[int, int, int]) -> float:
     r, g, b = (c / 255 for c in rgb)
     return 0.2126 * r + 0.7152 * g + 0.0722 * b
@@ -207,6 +253,7 @@ def compose(
     icons: list[str] | None = None,
     word_colors: dict[str, str] | None = None,
     labels: list[dict] | None = None,
+    card: dict | None = None,
     diagram: dict | None = None,
     tile: dict | None = None,
     hero: str | None = None,
@@ -337,21 +384,21 @@ def compose(
 
     # --- hero visual / rendered prop --------------------------------------
     hero_layer: Image.Image | None = None
+    card_spec = dict(card or {})
+    if not card_spec and card_text:
+        card_spec = {"type": "tweet", "text": card_text,
+                     "name": card_name, "handle": card_handle}
+    elif not card_spec and toast_text and toast_amount:
+        card_spec = {"type": "toast", "text": toast_text, "sublabel": toast_amount}
+
     if not draw_art or not want("hero"):
         hero_layer = None
     elif hero:
         hero_img = load_image(hero)
         if hero_img is not None:
             hero_layer = hero_img
-    elif card_text:
-        hero_layer = cards.with_shadow(
-            cards.social_card(int(w * 0.42), card_text, display_name=card_name,
-                              handle=card_handle, scale=SCALE * 0.9)
-        )
-    elif toast_text and toast_amount:
-        hero_layer = cards.with_shadow(
-            cards.toast(int(w * 0.36), toast_text, toast_amount, scale=SCALE * 0.9)
-        )
+    elif card_spec.get("type"):
+        hero_layer = _render_card(card_spec, w, style)
     elif diagram and diagram.get("nodes"):
         light_plate = _luma(style.bg_top) > 0.6
         hero_layer = node_diagram(
@@ -387,7 +434,7 @@ def compose(
             fitted = _rotate_layer(fitted, hero_rot)
             origin = (origin[0] - (fitted.width - before[0]) // 2,
                       origin[1] - (fitted.height - before[1]) // 2)
-        if not card_text and not toast_text:
+        if not card_spec.get("type"):
             canvas.alpha_composite(drop_shadow(
                 _pad_to(fitted, (w, h), origin), (0, int(18 * SCALE)), int(26 * SCALE), 0.45))
         canvas.alpha_composite(fitted, origin)

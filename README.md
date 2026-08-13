@@ -189,10 +189,22 @@ through to the trim and QC steps, so `rembg` is optional.
 Nate's tweet cards and payment toasts are the elements diffusion models mangle
 worst — small UI text comes out as gibberish. `app/cards.py` draws them:
 
-- `card_text` → a social post card (`card_name` / `card_handle` set the identity)
-- `toast_text` + `toast_amount` → a notification pill
-- `diagram` → a hub-and-spoke node graph, the "1 Person Business" element
-- `tile` → a repeating grid of icons with optional crosses, as a backdrop
+Seven prop types, each taken from something the reference channels actually
+use. `GET /cards` lists them with the fields each one needs:
+
+| `card.type` | From | Fields |
+|---|---|---|
+| `tweet` | Nate's post cards | `text`, `name`, `handle`, `metrics` |
+| `toast` | Nate's payment pills, Liam's Stripe alert | `text`, `sublabel` |
+| `stat` | Liam's "$45,208 / last 30 days" | `text`, `sublabel` |
+| `checklist` | Liam's ticked sticky note | `text`, `items` |
+| `prompt` | Nate's "Describe a task or ask a question" | `text` |
+| `chat` | Message exchanges | `items` |
+| `terminal` | Agent output | `items` |
+
+Plus `diagram` (hub or cycle, optionally in a device frame) and `tile` (a
+repeating backdrop). `card_text` / `toast_text` still work for callers written
+before `card` existed.
 
 Always legible, always free, and editable after the fact.
 

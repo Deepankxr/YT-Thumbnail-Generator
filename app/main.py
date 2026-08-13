@@ -123,6 +123,34 @@ def palette():
     }
 
 
+@app.get("/cards")
+def card_types():
+    """Prop types the renderer can draw, with the fields each one uses."""
+    return {"cards": [
+        {"type": "tweet", "label": "Social post",
+         "fields": ["text", "name", "handle", "metrics"],
+         "note": "Avatar, name, body and optional engagement counts."},
+        {"type": "toast", "label": "Notification",
+         "fields": ["text", "sublabel"],
+         "note": 'Pill with an icon, e.g. "Payment received / $17,532".'},
+        {"type": "stat", "label": "Stat + chart",
+         "fields": ["text", "sublabel"],
+         "note": 'A big figure over a rising sparkline, e.g. "$45,208 / last 30 days".'},
+        {"type": "checklist", "label": "Checklist note",
+         "fields": ["text", "items"],
+         "note": "Sticky note of ticked-off tasks."},
+        {"type": "prompt", "label": "Prompt input",
+         "fields": ["text"],
+         "note": 'An empty input bar, e.g. "Describe a task or ask a question".'},
+        {"type": "chat", "label": "Chat bubbles",
+         "fields": ["items"],
+         "note": "Alternating messages; every second line is the reply."},
+        {"type": "terminal", "label": "Terminal",
+         "fields": ["items"],
+         "note": "Dark window of output; lines starting $ > or a tick are highlighted."},
+    ]}
+
+
 @app.get("/edit/models")
 def edit_models():
     """Image-editing models available on OpenRouter. No key needed — the list is
@@ -287,6 +315,7 @@ def edit(
             hero=spec.hero, background=spec.background,
             diagram=spec.diagram.model_dump() if spec.diagram else None,
             tile=spec.tile.model_dump() if spec.tile else None,
+            card=spec.card.model_dump() if spec.card else None,
             card_text=spec.card_text, card_name=spec.card_name,
             card_handle=spec.card_handle, toast_text=spec.toast_text,
             toast_amount=spec.toast_amount,
@@ -315,7 +344,8 @@ def edit(
                 subject=spec.subject, subjects=spec.subjects, icons=spec.icons,
                 hero=spec.hero,
                 diagram=spec.diagram.model_dump() if spec.diagram else None,
-                card_text=spec.card_text, card_name=spec.card_name,
+                card=spec.card.model_dump() if spec.card else None,
+            card_text=spec.card_text, card_name=spec.card_name,
                 card_handle=spec.card_handle, toast_text=spec.toast_text,
                 toast_amount=spec.toast_amount,
                 hidden=list(spec.hidden), behind=spec.behind, **common,

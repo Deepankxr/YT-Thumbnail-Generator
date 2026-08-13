@@ -93,6 +93,7 @@ PREVIEW_HTML = """
  #selinfo{background:#15171a;border:1px solid var(--line);border-radius:6px;padding:9px;
           margin-top:9px;font-size:11.5px;color:var(--muted);display:none}
  #selinfo b{color:var(--fg)}
+ #cardfields:empty{display:none}
  #words{display:flex;flex-wrap:wrap;gap:5px}
  .word{width:auto;margin:0;background:#0d0e10;border:1px solid var(--line);border-radius:5px;
        padding:4px 8px;font-size:11.5px;font-weight:400;cursor:pointer;color:var(--fg)}
@@ -110,6 +111,16 @@ PREVIEW_HTML = """
  .lrow button{flex:0 0 auto}
  .hint{font-size:10.5px;color:var(--muted);margin-top:9px;line-height:1.55}
  kbd{background:#26292e;border-radius:3px;padding:1px 5px;font-size:9.5px;font-family:inherit}
+
+ /* Fixed side columns leave nothing for the canvas on a narrow window, and
+    the canvas is the point of the page. Shrink the panels, then stack. */
+ @media (max-width:1240px){ #panel,#chat{width:290px} }
+ @media (max-width:1040px){ #panel,#chat{width:250px} #stage{padding:14px} }
+ @media (max-width:860px){
+   body{flex-direction:column;height:auto;overflow:auto}
+   .col{width:100%!important;max-height:none}
+   #stage{order:-1}
+ }
 
  /* ---- chat ---- */
  #log{flex:1;overflow-y:auto;margin:12px 0;display:flex;flex-direction:column;gap:10px;min-height:120px}
@@ -186,17 +197,10 @@ PREVIEW_HTML = """
  <input type="file" id="hero" accept="image/*">
 
  <hr>
- <h2>Social card</h2>
- <label>Card text</label>
- <input type="text" id="card" placeholder="The only kind of AI business that sells.">
- <div class="row" style="margin-top:7px">
-  <div><label>Display name</label><input type="text" id="cardname" placeholder="Your Name"></div>
-  <div><label>Handle</label><input type="text" id="cardhandle" placeholder="@yourhandle"></div>
- </div>
- <div class="row" style="margin-top:7px">
-  <div><label>Toast label</label><input type="text" id="toastt" placeholder="Payment received"></div>
-  <div><label>Toast amount</label><input type="text" id="toasta" placeholder="$17,532"></div>
- </div>
+ <h2>Card</h2>
+ <select id="cardtype"><option value="">None</option></select>
+ <div id="cardnote" class="sub" style="margin:6px 0 0"></div>
+ <div id="cardfields"></div>
 
  <hr>
  <button id="dl">Download PNG</button>
@@ -295,7 +299,8 @@ async function boot(){
     o.textContent=st.name+' \\u2014 '+st.accent;s.appendChild(o)});
   s.onchange=()=>{fillPalettes();schedule()};
   fillPalettes(); drawWords(); drawSwatches(); drawLabels();
-  loadEditModels(); loadVisionModels(); loadAvatarOptions(); render(false);
+  loadEditModels(); loadVisionModels(); loadAvatarOptions();
+  loadCards().then(drawCardFields); render(false);
 }
 
 /* ---------------- recreate from a reference ---------------- */
@@ -322,9 +327,17 @@ function applySpec(sp){
   $('arrow').checked = !!sp.arrow;
   BEHIND = sp.behind || [];
   LABELS = (sp.labels||[]).map(l=>Object.assign({size:0.055}, l));
-  $('card').value = sp.card_text || '';
-  $('toastt').value = sp.toast_text || '';
-  $('toasta').value = sp.toast_amount || '';
+  const inCard = sp.card || (sp.card_text ? {type:'tweet', text:sp.card_text} :
+                 (sp.toast_text ? {type:'toast', text:sp.toast_text, sublabel:sp.toast_amount} : null));
+  $('cardtype').value = inCard ? inCard.type : '';
+  if(inCard){
+    CARDVALS[inCard.type] = {
+      text:inCard.text||'', sublabel:inCard.sublabel||'',
+      name:inCard.name||'', handle:inCard.handle||'',
+      items:(inCard.items||[]).join('\\n'), metrics:(inCard.metrics||[]).join(', '),
+    };
+  }
+  drawCardFields();
   $('dnodes').value = ((sp.diagram||{}).nodes||[]).map(n=>n.label).join('\\n');
   $('tileon').checked = !!sp.tile;
   if(sp.tile){
@@ -454,11 +467,7 @@ async function buildSpec(){
   };
   const tp=$('textpos').value; if(tp)body.text_position=tp;
   const sd=$('side').value; if(sd)body.subject_side=sd;
-  const card=$('card').value; if(card)body.card_text=card;
-  const cn=$('cardname').value.trim(); if(cn)body.card_name=cn;
-  const ch=$('cardhandle').value.trim(); if(ch)body.card_handle=ch;
-  const tt=$('toastt').value, ta=$('toasta').value;
-  if(tt&&ta){body.toast_text=tt;body.toast_amount=ta;}
+  const card=cardSpec(); if(card)body.card=card;
 
   if($('tileon').checked){
     const cols=parseInt($('tilecols').value,10), op=parseFloat($('tileop').value);
@@ -895,13 +904,13 @@ function updateHiddenChip(){
    Snapshot the whole editable state rather than diffing individual actions:
    the state is small, and it means undo covers typing, colours, deletions and
    drags with one mechanism instead of four. */
-const FIELDS=['headline','accent','textpos','side','card','cardname','cardhandle',
-              'toastt','toasta','dnodes','dcenter','style','palette','tilecols','tileop'];
+const FIELDS=['headline','accent','textpos','side','cardtype',
+              'dnodes','dcenter','style','palette','tilecols','tileop'];
 let HIST=[], HPTR=-1, restoring=false;
 
 function snapshot(){
   const f={}; FIELDS.forEach(id=>f[id]=$(id).value);
-  return JSON.stringify({f, arrow:$('arrow').checked, tile:$('tileon').checked,
+  return JSON.stringify({f, cards:CARDVALS, arrow:$('arrow').checked, tile:$('tileon').checked,
                          tilex:$('tilex').checked, ov:OVERRIDES,
                          hid:HIDDEN, beh:BEHIND, lab:LABELS, wc:WORDCOLORS});
 }
@@ -925,9 +934,68 @@ async function applyHistory(step){
   $('arrow').checked=st.arrow;
   $('tileon').checked=!!st.tile; $('tilex').checked=st.tilex!==false;
   OVERRIDES=st.ov; HIDDEN=st.hid; BEHIND=st.beh||[]; LABELS=st.lab; WORDCOLORS=st.wc;
+  CARDVALS=st.cards||{}; drawCardFields();
   SEL=[]; drawWords(); drawLabels(); updateHiddenChip();
   restoring=false;
   await render(false);
+}
+
+/* ---------------- cards ----------------
+   The panel stays a single dropdown until a type is chosen, then grows only
+   the fields that type actually uses. Seven card types' worth of inputs shown
+   at once would bury everything else in the column. */
+let CARDS=[], CARDVALS={};
+
+const CARD_FIELDS={
+  text:      {label:'Text',      ph:'Body / title / figure'},
+  sublabel:  {label:'Sub-label', ph:'Amount or caption'},
+  name:      {label:'Name',      ph:'Your Name'},
+  handle:    {label:'Handle',    ph:'@yourhandle'},
+  metrics:   {label:'Counts',    ph:'792, 1.4K, 5.8K'},
+  items:     {label:'Lines',     ph:'one per line', area:true},
+};
+
+async function loadCards(){
+  try{ CARDS=(await (await fetch('cards')).json()).cards; }catch(e){ return; }
+  const sel=$('cardtype');
+  CARDS.forEach(c=>{ const o=document.createElement('option');
+    o.value=c.type; o.textContent=c.label; o.title=c.note; sel.appendChild(o); });
+  sel.onchange=()=>{ drawCardFields(); schedule(); };
+}
+
+function drawCardFields(){
+  const type=$('cardtype').value;
+  const box=$('cardfields'), note=$('cardnote');
+  box.innerHTML='';
+  const def=CARDS.find(c=>c.type===type);
+  note.textContent = def ? def.note : '';
+  if(!def) return;
+
+  CARDVALS[type] = CARDVALS[type] || {};
+  def.fields.forEach(f=>{
+    const meta=CARD_FIELDS[f]; if(!meta) return;
+    const lab=document.createElement('label'); lab.textContent=meta.label;
+    const el=document.createElement(meta.area?'textarea':'input');
+    if(!meta.area) el.type='text';
+    el.placeholder=meta.ph;
+    el.value=CARDVALS[type][f]||'';
+    el.oninput=e=>{ CARDVALS[type][f]=e.target.value; debounce(); };
+    box.appendChild(lab); box.appendChild(el);
+  });
+}
+
+function cardSpec(){
+  const type=$('cardtype').value;
+  if(!type) return null;
+  const v=CARDVALS[type]||{};
+  const spec={type};
+  if(v.text) spec.text=v.text;
+  if(v.sublabel) spec.sublabel=v.sublabel;
+  if(v.name) spec.name=v.name;
+  if(v.handle) spec.handle=v.handle;
+  if(v.items) spec.items=v.items.split('\\n').map(s=>s.trim()).filter(Boolean);
+  if(v.metrics) spec.metrics=v.metrics.split(',').map(s=>s.trim()).filter(Boolean);
+  return spec;
 }
 
 /* ---------------- avatar ---------------- */
@@ -1006,6 +1074,7 @@ async function restoreVersion(id){
   $('arrow').checked=st.arrow;
   $('tileon').checked=!!st.tile; $('tilex').checked=st.tilex!==false;
   OVERRIDES=st.ov; HIDDEN=st.hid; BEHIND=st.beh||[]; LABELS=st.lab; WORDCOLORS=st.wc;
+  CARDVALS=st.cards||{}; drawCardFields();
   EDITED_BG=v.bg||null;
   SEL=[]; drawWords(); drawLabels(); updateHiddenChip();
   restoring=false;

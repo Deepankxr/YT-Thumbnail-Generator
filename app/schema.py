@@ -103,6 +103,27 @@ class Tile(BaseModel):
     accent: str | None = None
 
 
+CARD_TYPES = ("tweet", "toast", "stat", "checklist", "prompt", "chat", "terminal")
+
+
+class Card(BaseModel):
+    """A rendered UI prop. `type` decides which of the fields below apply."""
+
+    type: Literal["tweet", "toast", "stat", "checklist", "prompt", "chat", "terminal"]
+    text: str = Field("", max_length=280,
+                      description="tweet body / toast title / stat figure / prompt placeholder.")
+    sublabel: str = Field("", max_length=80,
+                          description="toast amount, or the caption under a stat.")
+    name: str = Field("Your Name", max_length=40, description="tweet display name.")
+    handle: str = Field("@yourhandle", max_length=40)
+    items: list[str] = Field(default_factory=list, max_length=8,
+                             description="checklist rows, chat lines, or terminal lines.")
+    metrics: list[str] = Field(default_factory=list, max_length=4,
+                               description="tweet engagement counts, e.g. 792, 1.4K, 5.8K.")
+    accent: str | None = None
+    dark: bool = True
+
+
 class ElementOverride(BaseModel):
     """A nudge applied on top of the preset's placement for one element."""
 
@@ -153,7 +174,10 @@ class ThumbnailRequest(BaseModel):
     diagram: Diagram | None = Field(None, description="Hub-and-spoke node diagram.")
     tile: Tile | None = Field(None, description="Repeating backdrop of marks.")
 
-    card_text: str | None = Field(None, description="Renders a social card prop.")
+    card: Card | None = Field(None, description="Rendered UI prop; see GET /cards.")
+
+    # Kept working for callers written before `card` existed.
+    card_text: str | None = Field(None, description="Shorthand for card {type: tweet}.")
     card_name: str = "Your Name"
     card_handle: str = "@yourhandle"
     toast_text: str | None = Field(None, description="Renders a notification toast prop.")
