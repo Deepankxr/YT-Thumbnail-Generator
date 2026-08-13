@@ -118,6 +118,8 @@ Return ONLY a JSON object with these keys (omit any that do not apply):
                   width/height from the top-left
   diagram         {{nodes:[{{label}}], center_label}} if there is a hub-and-spoke
                   graph of labelled nodes
+  tile            {{columns, cross}} if the background is a repeating grid of
+                  logos or icons, with cross=true when they are struck through
   card_text       the body text if a social-post card is shown
   toast_text, toast_amount   if a notification pill is shown
   notes           one sentence on anything the renderer cannot reproduce
@@ -152,7 +154,7 @@ def _extract_json(text: str) -> dict:
 ALLOWED = {
     "headline", "style", "palette", "accent_words", "word_colors", "text_position",
     "subject_side", "behind", "arrow", "labels", "diagram", "card_text",
-    "toast_text", "toast_amount",
+    "toast_text", "toast_amount", "tile",
 }
 
 
@@ -223,6 +225,13 @@ def clean_spec(raw: dict) -> tuple[dict, list[str]]:
                 if h.lower() not in valid:
                     warnings.append(f"'{word}' used a colour outside the palette ({h})")
         spec["word_colors"] = wc
+
+    if "tile" in spec:
+        t = spec["tile"] if isinstance(spec["tile"], dict) else {}
+        clean_tile = {"columns": int(min(20, max(1, t.get("columns", 6)))),
+                      "cross": bool(t.get("cross", True)),
+                      "opacity": min(1.0, max(0.0, float(t.get("opacity", 0.5))))}
+        spec["tile"] = clean_tile
 
     # The caller's own photo goes here; the reference's person never does.
     spec.pop("subject", None)

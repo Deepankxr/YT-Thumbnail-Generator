@@ -63,6 +63,21 @@ class Diagram(BaseModel):
     accent: str | None = Field(None, description="Node colour; defaults to the style accent.")
 
 
+class Tile(BaseModel):
+    """Repeating backdrop of marks, optionally struck through."""
+
+    icons: list[str] = Field(default_factory=list,
+                             description="Images to repeat; a generic mark is used if empty.")
+    columns: int = Field(6, ge=1, le=20)
+    opacity: float = Field(0.5, ge=0.0, le=1.0)
+    cross: bool = Field(True, description="Strike tiles through.")
+    cross_color: str | None = None
+    cross_every: int = Field(1, ge=0, le=12, description="Strike every nth tile; 0 disables.")
+    angle: float = Field(0.0, ge=-45.0, le=45.0)
+    blur: float = Field(0.0, ge=0.0, le=40.0)
+    accent: str | None = None
+
+
 class ElementOverride(BaseModel):
     """A nudge applied on top of the preset's placement for one element."""
 
@@ -109,6 +124,7 @@ class ThumbnailRequest(BaseModel):
     labels: list[Label] = Field(default_factory=list, max_length=8,
                                 description="Free-standing captions with optional arrows.")
     diagram: Diagram | None = Field(None, description="Hub-and-spoke node diagram.")
+    tile: Tile | None = Field(None, description="Repeating backdrop of marks.")
 
     card_text: str | None = Field(None, description="Renders a social card prop.")
     card_name: str = "Your Name"

@@ -163,6 +163,15 @@ PREVIEW_HTML = """
  <input type="text" id="dcenter" placeholder="Centre label (optional)" style="margin-top:7px">
 
  <hr>
+ <h2>Tiled backdrop</h2>
+ <div class="chk"><input type="checkbox" id="tileon"><label for="tileon">Repeating grid</label></div>
+ <div class="row" style="margin-top:7px">
+  <div><label>Columns</label><input type="text" id="tilecols" value="6"></div>
+  <div><label>Opacity</label><input type="text" id="tileop" value="0.5"></div>
+ </div>
+ <div class="chk"><input type="checkbox" id="tilex" checked><label for="tilex">Strike through</label></div>
+
+ <hr>
  <label>Your photo (cutout PNG)</label>
  <input type="file" id="subject" accept="image/*">
  <label>Hero image / logo</label>
@@ -290,6 +299,12 @@ function applySpec(sp){
   $('toastt').value = sp.toast_text || '';
   $('toasta').value = sp.toast_amount || '';
   $('dnodes').value = ((sp.diagram||{}).nodes||[]).map(n=>n.label).join('\\n');
+  $('tileon').checked = !!sp.tile;
+  if(sp.tile){
+    $('tilecols').value = sp.tile.columns ?? 6;
+    $('tileop').value   = sp.tile.opacity ?? 0.5;
+    $('tilex').checked  = sp.tile.cross !== false;
+  }
   $('dcenter').value = (sp.diagram||{}).center_label || '';
   OVERRIDES={}; HIDDEN=[]; SEL=[];
   drawWords(); drawLabels(); updateHiddenChip();
@@ -418,6 +433,12 @@ async function buildSpec(){
   const tt=$('toastt').value, ta=$('toasta').value;
   if(tt&&ta){body.toast_text=tt;body.toast_amount=ta;}
 
+  if($('tileon').checked){
+    const cols=parseInt($('tilecols').value,10), op=parseFloat($('tileop').value);
+    body.tile={columns: isNaN(cols)?6:Math.min(20,Math.max(1,cols)),
+               opacity: isNaN(op)?0.5:Math.min(1,Math.max(0,op)),
+               cross: $('tilex').checked};
+  }
   const nodes=$('dnodes').value.split('\\n').map(s=>s.trim()).filter(Boolean);
   if(nodes.length){
     body.diagram={nodes:nodes.map(n=>({label:n}))};
@@ -761,9 +782,22 @@ function deleteSelected(){
   // Highest label index first, or each splice shifts the ones still to remove.
   const labelIdx=SEL.map(id=>(id.match(/^label(\\d+)$/)||[])[1])
                     .filter(v=>v!==undefined).map(Number).sort((a,b)=>b-a);
-  labelIdx.forEach(i=>LABELS.splice(i,1));
   if(labelIdx.length){
-    Object.keys(OVERRIDES).filter(k=>k.startsWith('label')).forEach(k=>delete OVERRIDES[k]);
+    // Labels are keyed by index, so a splice renumbers the survivors. Remap
+    // their overrides instead of clearing them — dropping one label used to
+    // throw away every other label's dragged position.
+    const removed=new Set(labelIdx);
+    const remapped={};
+    let next=0;
+    LABELS.forEach((_,old)=>{
+      if(removed.has(old)) return;
+      const ov=OVERRIDES['label'+old];
+      if(ov) remapped['label'+next]=ov;
+      next++;
+    });
+    Object.keys(OVERRIDES).filter(k=>/^label\\d+$/.test(k)).forEach(k=>delete OVERRIDES[k]);
+    Object.assign(OVERRIDES, remapped);
+    labelIdx.forEach(i=>LABELS.splice(i,1));
     drawLabels();
   }
   SEL.filter(id=>!/^label\\d+$/.test(id)).forEach(id=>{
@@ -793,12 +827,13 @@ function updateHiddenChip(){
    the state is small, and it means undo covers typing, colours, deletions and
    drags with one mechanism instead of four. */
 const FIELDS=['headline','accent','textpos','side','card','cardname','cardhandle',
-              'toastt','toasta','dnodes','dcenter','style','palette'];
+              'toastt','toasta','dnodes','dcenter','style','palette','tilecols','tileop'];
 let HIST=[], HPTR=-1, restoring=false;
 
 function snapshot(){
   const f={}; FIELDS.forEach(id=>f[id]=$(id).value);
-  return JSON.stringify({f, arrow:$('arrow').checked, ov:OVERRIDES,
+  return JSON.stringify({f, arrow:$('arrow').checked, tile:$('tileon').checked,
+                         tilex:$('tilex').checked, ov:OVERRIDES,
                          hid:HIDDEN, beh:BEHIND, lab:LABELS, wc:WORDCOLORS});
 }
 function pushHistory(){
@@ -819,6 +854,7 @@ async function applyHistory(step){
   FIELDS.forEach(id=>{ if(st.f[id]!==undefined) $(id).value=st.f[id]; });
   fillPalettes(); $('palette').value=st.f.palette;
   $('arrow').checked=st.arrow;
+  $('tileon').checked=!!st.tile; $('tilex').checked=st.tilex!==false;
   OVERRIDES=st.ov; HIDDEN=st.hid; BEHIND=st.beh||[]; LABELS=st.lab; WORDCOLORS=st.wc;
   SEL=[]; drawWords(); drawLabels(); updateHiddenChip();
   restoring=false;

@@ -18,6 +18,7 @@ from .shapes import (
     drop_shadow, hand_arrow, linear_gradient, radial_glow, rim_light, scrim, vignette,
 )
 from .styles import Style, get_style
+from .tiles import tiled_backdrop
 from .assets import load_font
 from .text import layout_headline, paint_headline, underline
 
@@ -201,6 +202,7 @@ def compose(
     word_colors: dict[str, str] | None = None,
     labels: list[dict] | None = None,
     diagram: dict | None = None,
+    tile: dict | None = None,
     hero: str | None = None,
     background: str | None = None,
     arrow: bool = True,
@@ -302,6 +304,22 @@ def compose(
     else:
         # Vector-only pass with no plate supplied: transparent, nothing to cover.
         canvas = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+
+    # --- tiled backdrop ---------------------------------------------------
+    if tile and draw_art and want("backdrop"):
+        canvas.alpha_composite(tiled_backdrop(
+            (w, h),
+            tile.get("icons") or [],
+            columns=int(tile.get("columns", 6)),
+            opacity=float(tile.get("opacity", 0.5)),
+            cross=bool(tile.get("cross", True)),
+            cross_color=parse_color(tile.get("cross_color")) or (232, 62, 40),
+            cross_every=int(tile.get("cross_every", 1)),
+            angle=float(tile.get("angle", 0.0)),
+            blur=float(tile.get("blur", 0.0)) * SCALE,
+            accent=(parse_color(tile.get("accent"))
+                    or style.accent_fill or style.accent_color or (217, 119, 87)),
+        ))
 
     # --- backlight --------------------------------------------------------
     if draw_art and want("backdrop") and style.glow_color and style.glow_intensity > 0:

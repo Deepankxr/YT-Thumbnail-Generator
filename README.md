@@ -114,6 +114,7 @@ The presets are a starting point, not a cage. Every knob below is per-request.
 | `hidden` | Drop elements by id (`headline`, `subject`, `hero`, `arrow`, `icons`, `label0`…). Deletion in the studio; restorable |
 | `only` | Render just these ids on transparency. With `hidden` it splits a frame into backdrop + isolated layer |
 | `behind` | Draw vector ids *beneath* the cutout, so text can pass behind the subject |
+| `tile` | Repeating backdrop of marks, optionally struck through — the "these all failed" grid |
 | `palette` | Swap the background. Light palettes auto-flip type, arrow and scrim to dark via a luminance test |
 
 Typography is driven off variable-font axes, so `ottley`'s compressed caps come
@@ -183,6 +184,7 @@ worst — small UI text comes out as gibberish. `app/cards.py` draws them:
 - `card_text` → a social post card (`card_name` / `card_handle` set the identity)
 - `toast_text` + `toast_amount` → a notification pill
 - `diagram` → a hub-and-spoke node graph, the "1 Person Business" element
+- `tile` → a repeating grid of icons with optional crosses, as a backdrop
 
 Always legible, always free, and editable after the fact.
 
@@ -254,6 +256,32 @@ The OFL permits commercial use and embedding but requires the licence to travel
 with the files, so it lives at `assets/fonts/OFL.txt` and is copied into the
 image. The fonts are third-party and are not covered by this repository's own
 licence terms.
+
+## Tests
+
+```bash
+pip install pytest
+python3 -m pytest -q
+```
+
+112 cases covering the API surface, every style against every one of its
+palettes, element identity and layer order, input validation, output shape, key
+handling, reference-spec cleaning, and the studio page's JavaScript.
+
+Three of these exist because the corresponding bug already happened once:
+
+- **The studio JS is parsed with `node --check`.** A stray newline inside a
+  string literal killed the whole page twice; nothing else catches it, because
+  the HTML still serves fine.
+- **Light palettes must not invent an underline.** No shipped preset currently
+  pairs "no underline" with a light palette, so the test constructs that pairing
+  rather than checking presets as they stand — otherwise it proves nothing.
+- **A tiled backdrop must not leak into an isolated layer.** The drag proxy
+  depends on backdrop and isolate being complementary; any new backdrop element
+  has to respect that or dragging shows doubled artwork.
+
+Both fixed bugs were re-introduced deliberately to confirm the suite fails on
+them. A test that has never failed has never been tested.
 
 ## Deploy
 

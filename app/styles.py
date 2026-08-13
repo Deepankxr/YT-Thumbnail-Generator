@@ -383,11 +383,20 @@ def get_style(name: str, palette: str | None = None) -> Style:
         # Light backgrounds need dark type and a dark arrow, or the whole thing
         # disappears. Luminance test rather than a hardcoded palette list.
         if _luminance(top) > 0.6:
+            # Darken only what would actually disappear. Blanket-darkening also
+            # flattens deliberate accents — enterprise's blue rule reads fine on
+            # paper and should survive — and `or` would hand a style with no
+            # underline a black one it never asked for.
+            def _ink(c: RGB | None) -> RGB | None:
+                if c is None:
+                    return None
+                return (16, 16, 18) if _luminance(c) > 0.5 else c
+
             style = replace(
                 style,
-                text_color=(16, 16, 18),
-                arrow_color=(16, 16, 18),
-                underline_color=style.underline_color or (16, 16, 18),
+                text_color=_ink(style.text_color),
+                arrow_color=_ink(style.arrow_color),
+                underline_color=_ink(style.underline_color),
                 shadow_opacity=min(style.shadow_opacity, 0.14),
                 stroke_width=0,
                 # A dark ramp under dark type would only muddy a light plate.
