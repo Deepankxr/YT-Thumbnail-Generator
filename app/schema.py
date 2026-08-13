@@ -69,7 +69,7 @@ class ElementOverride(BaseModel):
 class ThumbnailRequest(BaseModel):
     headline: str = Field(..., min_length=1, max_length=120,
                           description="Thumbnail copy. 3-6 words performs best.")
-    style: Literal["saraev", "herk", "roberts", "ottley"] = "saraev"
+    style: Literal["saraev", "herk", "roberts", "ottley", "enterprise"] = "saraev"
     palette: str | None = Field(None, description="Palette name from the style; see GET /styles.")
     accent_words: list[str] = Field(default_factory=list,
                                     description="Words to highlight (pill or colour, per style).")

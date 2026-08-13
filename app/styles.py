@@ -272,7 +272,65 @@ OTTLEY = Style(
     },
 )
 
-STYLES: dict[str, Style] = {s.name: s for s in (SARAEV, HERK, ROBERTS, OTTLEY)}
+
+ENTERPRISE = Style(
+    name="enterprise",
+    description="Restrained and credible. Built for a senior operator scrolling "
+                "with no patience: sentence case, two colours, generous negative "
+                "space, no glow or stroke. The visual carries substance rather "
+                "than a reaction.",
+    bg_top=(247, 246, 243),
+    bg_bottom=(238, 236, 231),
+    # No glow, no vignette. Both read as 'video thumbnail' rather than
+    # 'business publication', which is exactly the wrong signal here.
+    glow_intensity=0.0,
+    vignette_strength=0.0,
+    font_family="inter",
+    font_weight="SemiBold",
+    text_color=(20, 22, 26),
+    text_case="none",
+    tracking=-0.018,
+    line_height=1.02,
+    max_lines=3,
+    text_align="left",
+    # A whisper of shadow for photo backplates; invisible on flat colour.
+    shadow=True,
+    shadow_opacity=0.10,
+    shadow_blur=18,
+    stroke_width=0,
+    scrim=None,
+    scrim_opacity=0.0,
+    # Emphasis is a thin rule under one phrase, not a highlighter pen.
+    accent_fill=None,
+    accent_color=(11, 87, 164),
+    underline_color=(11, 87, 164),
+    underline_swash=False,
+    text_box=(0.055, 0.15, 0.52, 0.34),
+    text_valign="center",
+    subject_box=(0.60, 0.06, 0.38, 0.94),
+    subject_anchor="bottom-right",
+    hero_box=(0.06, 0.60, 0.44, 0.34),
+    # Sits below the headline band rather than behind it.
+    diagram_box=(0.04, 0.44, 0.50, 0.50),
+    icon_slots=[(0.06, 0.72, 0.10), (0.19, 0.72, 0.10), (0.32, 0.72, 0.10)],
+    subject_shadow=True,
+    subject_shadow_opacity=0.22,
+    subject_rim=None,
+    # An arrow is a creator-economy tell. Off by default; still available.
+    arrow_color=(11, 87, 164),
+    arrow_width=6,
+    arrow_bow=0.22,
+    arrow_from=(0.30, 0.34),
+    arrow_to=(0.42, 0.52),
+    palettes={
+        "paper": ((247, 246, 243), (238, 236, 231)),
+        "slate": ((30, 36, 46), (18, 22, 30)),
+        "navy": ((17, 34, 64), (10, 20, 40)),
+        "graphite": ((38, 40, 44), (24, 26, 30)),
+    },
+)
+
+STYLES: dict[str, Style] = {s.name: s for s in (SARAEV, HERK, ROBERTS, OTTLEY, ENTERPRISE)}
 
 
 # Curated word-colour palette. Every swatch was picked to survive the two things
@@ -329,11 +387,20 @@ def get_style(name: str, palette: str | None = None) -> Style:
                 style,
                 text_color=(16, 16, 18),
                 arrow_color=(16, 16, 18),
-                underline_color=(16, 16, 18) if style.underline_color else None,
-                shadow_opacity=0.14,
+                underline_color=style.underline_color or (16, 16, 18),
+                shadow_opacity=min(style.shadow_opacity, 0.14),
                 stroke_width=0,
                 # A dark ramp under dark type would only muddy a light plate.
                 scrim_opacity=0.0,
+            )
+        elif _luminance(style.text_color) < 0.4:
+            # Dark type was chosen for this style's default light plate; a dark
+            # palette needs it flipped back or the headline disappears.
+            style = replace(
+                style,
+                text_color=(245, 246, 248),
+                arrow_color=(120, 170, 235),
+                underline_color=(120, 170, 235) if style.underline_color else None,
             )
     return style
 

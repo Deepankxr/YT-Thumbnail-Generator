@@ -271,7 +271,9 @@ def generate(req: ThumbnailRequest, x_api_key: str | None = Header(default=None)
     data = buf.getvalue()
     mime = MIME_BY_FORMAT[req.format]
 
-    qa = legibility_report(img, req.style, text_position=req.text_position) if req.include_qa else None
+    qa = (legibility_report(img, req.style, text_position=req.text_position,
+                            has_diagram=bool(req.diagram and req.diagram.nodes))
+          if req.include_qa else None)
     filename = _filename(req)
     if req.format == "jpeg":
         filename = filename.rsplit(".", 1)[0] + ".jpg"

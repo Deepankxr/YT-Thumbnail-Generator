@@ -84,6 +84,7 @@ raw base64, or a path on the server.
 | `herk` | Photo plate, big face right, rendered UI card. | Inter Black | Cyan pill |
 | `roberts` | High energy. Neon rim light, backlight glow, hard stroke. | Montserrat Black | Blue pill |
 | `ottley` | Editorial and loud. Full-width band, floating 3D logos, group shots. | Archivo Black, compressed caps | Hard red plate + yellow swash |
+| `enterprise` | Restrained and credible. Sentence case, two colours, no glow or stroke. | Inter SemiBold | Thin blue rule |
 
 Each carries its own palettes (`GET /styles`). Supply a light palette and the
 type, arrow and scrim automatically flip to dark — there's a luminance test, not
@@ -108,6 +109,27 @@ The presets are a starting point, not a cage. Every knob below is per-request.
 
 Typography is driven off variable-font axes, so `ottley`'s compressed caps come
 from Archivo's `wdth` axis at 72 rather than a second font file.
+
+## The enterprise preset
+
+The other four presets are creator-economy styling: reaction faces, neon, shouted
+all-caps. That language reads as low-credibility to a senior operator before they
+have read a word, so `enterprise` deliberately inverts it.
+
+| Choice | Why |
+|---|---|
+| Sentence case, Inter SemiBold | Reads as a publication, not a shout |
+| No glow, no vignette, no stroke | Each of those is a "video thumbnail" tell |
+| Thin rule under the accent phrase | Emphasis without a highlighter pen |
+| Two colours, generous negative space | Confidence rather than urgency |
+| Arrow off by default | The most recognisable creator-economy tell of all |
+
+Palettes: `paper`, `slate`, `navy`, `graphite`. Type flips light or dark to suit
+the plate automatically.
+
+It pairs well with `diagram` — a roadmap or an architecture beats a shocked
+expression for this audience. When a diagram is present the headline moves to a
+top band and the subject to the right, so the two never fight for the centre.
 
 ## Adding a real face
 

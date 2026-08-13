@@ -312,7 +312,8 @@ def compose(
             diagram["nodes"],
             center_icon=diagram.get("center_icon"),
             center_label=diagram.get("center_label"),
-            accent=parse_color(diagram.get("accent")) or (style.accent_fill or (217, 119, 87)),
+            accent=(parse_color(diagram.get("accent"))
+                    or style.accent_fill or style.accent_color or (217, 119, 87)),
             text_color=style.text_color,
             dark=not light_plate,
             scale=SCALE * 0.9,
@@ -430,6 +431,10 @@ def compose(
 
     copy = _apply_case(headline, style.text_case)
     text_rect = style.text_box
+    if text_position is None and diagram and diagram.get("nodes"):
+        # Same reasoning as the subject: the diagram owns the centre, so the
+        # headline goes to the top band rather than sitting on top of it.
+        text_position = "top"
     if text_position == "top":
         text_rect = (text_rect[0], 0.06, text_rect[2], text_rect[3])
     elif text_position == "bottom":
@@ -500,7 +505,7 @@ def _pad_to(layer: Image.Image, size: tuple[int, int], origin: tuple[int, int]) 
 
 
 def legibility_report(img: Image.Image, style_name: str = "saraev", feed_width: int = 168,
-                      text_position: str | None = None) -> dict:
+                      text_position: str | None = None, has_diagram: bool = False) -> dict:
     """Check the headline still reads at YouTube feed size.
 
     Downsamples to the width a thumbnail actually occupies in a browsing feed,
@@ -518,6 +523,8 @@ def legibility_report(img: Image.Image, style_name: str = "saraev", feed_width: 
         box = (0.05, 0.07, 0.60, 0.32)
 
     # Must mirror render()'s override, or we measure an empty strip.
+    if text_position is None and has_diagram:
+        text_position = "top"
     if text_position == "top":
         box = (box[0], 0.06, box[2], box[3])
     elif text_position == "bottom":
